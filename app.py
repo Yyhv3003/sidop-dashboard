@@ -17,7 +17,21 @@ warnings.filterwarnings("ignore")
 # CONFIGURACIÓN
 # ─────────────────────────────────────────────────────────────
 
-EXCEL_PATH = Path(__file__).parent / "data" / "Diagnostico_Pozos_PowerBI.xlsx"
+GDRIVE_FILE_ID = "1bur7CrEDEy5BjC4dV-FwK2Bi49XPt3yu"
+EXCEL_PATH = Path("/tmp/Diagnostico_Pozos_PowerBI.xlsx")
+
+def descargar_excel():
+    """Descarga el Excel desde Google Drive si no existe localmente."""
+    if not EXCEL_PATH.exists():
+        try:
+            import gdown
+            url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
+            gdown.download(url, str(EXCEL_PATH), quiet=True)
+        except Exception as e:
+            st.error(f"No se pudo descargar el archivo de datos: {e}")
+            st.stop()
+
+descargar_excel()
 
 # Quintana Energy — Brand Colors
 C_DARK   = "#33492D"   # Verde Bosque  → header
@@ -534,6 +548,8 @@ with st.sidebar:
 
     st.markdown("---")
     if st.button("🔄 Actualizar datos", use_container_width=True, type="primary"):
+        if EXCEL_PATH.exists():
+            EXCEL_PATH.unlink()   # borra local → fuerza re-descarga desde Drive
         st.cache_data.clear()
         st.rerun()
     st.caption(f"Última actualización: {last_update}")
