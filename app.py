@@ -822,7 +822,7 @@ with tab1:
 
     styled = (
         df_tabla.style
-        .applymap(color_riesgo, subset=["RIESGO"])
+        .map(color_riesgo, subset=["RIESGO"])
         if "RIESGO" in df_tabla.columns
         else df_tabla.style
     )
