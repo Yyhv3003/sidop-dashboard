@@ -617,11 +617,22 @@ with tab1:
         df_tab1 = df[~df["SISTEMA_EXTRACTIVO"].isin(EXCLUIR_SISTEMAS)].copy() \
             if "SISTEMA_EXTRACTIVO" in df.columns else df.copy()
 
-    # ── Último diagnóstico filtrado a los pozos de Tab 1 ──
+    # ── Último diagnóstico — fuente completa de Historico_Diagnosticos ──
+    # NO se filtra por Cierre Diario: el universo lo define la hoja de diagnósticos.
     if not ult_diag_todos.empty and "NOMBRE_POZO" in ult_diag_todos.columns:
-        ult_diag_t1 = ult_diag_todos[
-            ult_diag_todos["NOMBRE_POZO"].isin(df_tab1["NOMBRE_POZO"])
-        ].copy()
+        ult_diag_t1 = ult_diag_todos.copy()
+        # Calcular ZONA desde Diccionario_Zonas (BATERIA → ZONA)
+        _dz = datos.get("Diccionario_Zonas", pd.DataFrame())
+        if not _dz.empty and "BATERIA" in _dz.columns and "ZONA" in _dz.columns:
+            _mapa_z = dict(zip(_dz["BATERIA"].astype(str), _dz["ZONA"]))
+            if "BATERIA" in ult_diag_t1.columns:
+                ult_diag_t1["ZONA"] = ult_diag_t1["BATERIA"].astype(str).map(_mapa_z).fillna("SIN_ZONA")
+        if "ZONA" not in ult_diag_t1.columns:
+            # Fallback: inferir desde nombre del pozo
+            ult_diag_t1["ZONA"] = ult_diag_t1["NOMBRE_POZO"].apply(
+                lambda n: "CL" if str(n).upper().startswith("CL-")
+                          else ("CS" if str(n).upper().startswith("CS-") else "SIN_ZONA")
+            )
     else:
         ult_diag_t1 = pd.DataFrame()
     _usa_diag = not ult_diag_t1.empty and "DIAG_ESTADO_OP" in ult_diag_t1.columns
@@ -637,25 +648,28 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── KPIs — fuente: Historico_Diagnosticos (último diagnóstico por pozo) ──
-    total_pozos = len(df_tab1)
+    # ── KPIs — universo: Historico_Diagnosticos (último diagnóstico por pozo) ──
     if _usa_diag:
+        total_pozos   = len(ult_diag_t1)
         en_potencial  = int((ult_diag_t1["DIAG_ESTADO_OP"] == "En potencial").sum())
         subexplotados = int(ult_diag_t1["DIAG_ESTADO_OP"].str.contains("Subexplotado", na=False).sum())
-        sin_dato      = total_pozos - len(ult_diag_t1)   # pozos sin diagnóstico cargado
+        # 4to KPI: pozos clasificados como Parado en la sub-categoría
+        parados = int(
+            (ult_diag_t1["DIAG_SUBCATEGORIA"].astype(str).str.strip().str.upper() == "PARADO").sum()
+        ) if "DIAG_SUBCATEGORIA" in ult_diag_t1.columns else 0
     else:
-        # fallback: ESTADO_OPERATIVO calculado desde niveles
+        # fallback: fuente Maestro (ESTADO_OPERATIVO calculado desde niveles)
+        total_pozos   = len(df_tab1)
         en_potencial  = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "En potencial"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
         subexplotados = len(df_tab1[df_tab1["ESTADO_OPERATIVO"].str.contains("Subexplotado", na=False)]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
-        sin_dato      = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "Sin dato de sumergencia"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
+        parados       = 0
 
     k1, k2, k3, k4 = st.columns(4)
-    _label_k4 = "Sin<br>Diagnóstico" if _usa_diag else "Sin Dato de<br>Sumergencia"
     for col_w, num, label in [
-        (k1, total_pozos,   "Total<br>Pozos"),
+        (k1, total_pozos,   "Total<br>con Diagnóstico"),
         (k2, en_potencial,  "Pozos<br>En Potencial"),
         (k3, subexplotados, "Pozos<br>Sub-explotados"),
-        (k4, sin_dato,      _label_k4),
+        (k4, parados,       "Pozos<br>Parados"),
     ]:
         with col_w:
             st.markdown(f"""
@@ -671,9 +685,10 @@ with tab1:
 
     with g1:
         st.markdown("**Total Pozos por Zona**")
-        if "ZONA" in df_tab1.columns and len(df_tab1) > 0:
+        _zona_src = ult_diag_t1 if (_usa_diag and "ZONA" in ult_diag_t1.columns) else df_tab1
+        if "ZONA" in _zona_src.columns and len(_zona_src) > 0:
             zona_cnt = (
-                df_tab1.groupby("ZONA", as_index=False)
+                _zona_src.groupby("ZONA", as_index=False)
                 .size()
                 .rename(columns={"size": "Total"})
                 .sort_values("Total", ascending=False)
@@ -818,6 +833,156 @@ with tab1:
                             )
                             tabla_pozos.index += 1
                             st.dataframe(tabla_pozos, use_container_width=True, height=220)
+
+    # ══ COBERTURA DE ACCIONES — SUB-EXPLOTADOS ══════════════════
+    # Cruza Historico_Diagnosticos con Acciones:
+    # cuenta como "con acción" si existe ≥1 acción POSTERIOR a la fecha del diagnóstico.
+    # ════════════════════════════════════════════════════════════
+
+    if _usa_diag and "DIAG_SUBCATEGORIA" in ult_diag_t1.columns:
+        st.markdown("---")
+        st.markdown("**Cobertura de Acciones — Sub-explotados**")
+        st.caption(
+            "Se considera que un pozo tiene acción si existe al menos una acción registrada "
+            "con fecha **posterior** a la del diagnóstico activo."
+        )
+
+        _acc = acciones.copy()
+
+        # ── Detectar columna de nombre de pozo en Acciones ──
+        _col_pa = next((c for c in _acc.columns if any(
+            p in str(c).upper() for p in ["NOMBRE_CORTO", "NOMBRE_POZO", "NOMBRE"]
+        )), None)
+        # ── Detectar columna de fecha en Acciones ──
+        _col_fa = next((c for c in _acc.columns if "FECHA" in str(c).upper()), None)
+
+        if _acc.empty or not _col_pa or not _col_fa:
+            st.info(
+                f"No se pudo construir el cruce. "
+                f"Columnas detectadas en Acciones: `{list(_acc.columns[:8])}`"
+            )
+        else:
+            # Normalizar Acciones
+            _acc = _acc[[_col_pa, _col_fa]].copy()
+            _acc.columns = ["NOMBRE_POZO", "FECHA_ACCION"]
+            _acc["NOMBRE_POZO"]   = _acc["NOMBRE_POZO"].astype(str).str.strip()
+            _acc["FECHA_ACCION"]  = pd.to_datetime(_acc["FECHA_ACCION"], errors="coerce")
+            _acc = _acc.dropna(subset=["NOMBRE_POZO", "FECHA_ACCION"])
+            _acc = _acc[_acc["NOMBRE_POZO"].str.upper() != "NAN"]
+
+            # Última acción por pozo
+            _ult_acc = (
+                _acc.groupby("NOMBRE_POZO")["FECHA_ACCION"].max()
+                .reset_index()
+                .rename(columns={"FECHA_ACCION": "FECHA_ULT_ACCION"})
+            )
+
+            # Sub-explotados desde el diagnóstico
+            _sub = ult_diag_t1[
+                ult_diag_t1["DIAG_ESTADO_OP"].str.contains("Subexplotado", na=False)
+                & ult_diag_t1["DIAG_SUBCATEGORIA"].notna()
+                & (ult_diag_t1["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
+            ].copy()
+
+            _sub["NOMBRE_POZO"] = _sub["NOMBRE_POZO"].astype(str).str.strip()
+            if "DIAG_FECHA" in _sub.columns:
+                _sub["DIAG_FECHA"] = pd.to_datetime(_sub["DIAG_FECHA"], errors="coerce")
+
+            _sub = _sub.merge(_ult_acc, on="NOMBRE_POZO", how="left")
+
+            # Flag: acción POSTERIOR al diagnóstico
+            if "DIAG_FECHA" in _sub.columns:
+                _sub["TIENE_ACCION"] = (
+                    _sub["FECHA_ULT_ACCION"].notna()
+                    & (_sub["FECHA_ULT_ACCION"] > _sub["DIAG_FECHA"])
+                )
+            else:
+                _sub["TIENE_ACCION"] = _sub["FECHA_ULT_ACCION"].notna()
+
+            # ── Construir tabla resumen ──
+            _rangos_acc = [
+                ("Subexplotado bajo entre 201-400m",      "201–400 m",   C_PRIM),
+                ("Subexplotado moderado entre 401-600m",   "401–600 m",   "#E67E22"),
+                ("Subexplotado alto > 600m",               "> 600 m",     C_RED),
+            ]
+
+            # Métrica global
+            _n_sub_total  = len(_sub)
+            _n_con_accion = int(_sub["TIENE_ACCION"].sum())
+            _n_sin_accion = _n_sub_total - _n_con_accion
+            _pct_global   = f"{100*_n_con_accion/_n_sub_total:.0f}%" if _n_sub_total else "–"
+
+            _ma, _mb, _mc = st.columns(3)
+            for _col_m, _val, _lbl, _col_c in [
+                (_ma, _n_sub_total,  "Sub-explotados",  C_NAVY),
+                (_mb, _n_con_accion, "Con Acción",      C_PRIM),
+                (_mc, _n_sin_accion, "Sin Acción",      C_RED),
+            ]:
+                with _col_m:
+                    st.markdown(
+                        f"<div style='background:{C_BG};border-radius:8px;padding:12px 16px;"
+                        f"text-align:center;margin-bottom:10px'>"
+                        f"<div style='font-size:1.6rem;font-weight:800;color:{_col_c}'>{_val}</div>"
+                        f"<div style='font-size:0.75rem;color:#555;margin-top:2px'>{_lbl}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+            # ── Tablas por rango ──
+            _rcols = st.columns(3)
+            for _rc, (_rkey, _rlabel, _rcolor) in zip(_rcols, _rangos_acc):
+                _df_r = _sub[
+                    _sub["DIAG_ESTADO_OP"].str.contains(_rkey, na=False, regex=False)
+                ].copy()
+
+                with _rc:
+                    _n_r = len(_df_r)
+                    _c_r = int(_df_r["TIENE_ACCION"].sum())
+                    _pct_r = f"{100*_c_r/_n_r:.0f}%" if _n_r else "–"
+                    st.markdown(
+                        f"<div style='font-weight:700;color:{_rcolor};"
+                        f"font-size:0.85rem;margin-bottom:6px'>"
+                        f"{_rlabel} — {_n_r} pozos | {_c_r} con acción ({_pct_r})</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    if _df_r.empty:
+                        st.info("Sin pozos en este rango.")
+                    else:
+                        # Agrupar por sub-categoría
+                        _filas_r = []
+                        for _sc, _grp in _df_r.groupby("DIAG_SUBCATEGORIA"):
+                            _t = len(_grp)
+                            _c = int(_grp["TIENE_ACCION"].sum())
+                            _s = _t - _c
+                            _p = f"{100*_c/_t:.0f}%" if _t else "–"
+                            _filas_r.append({
+                                "Sub-categoría": _sc,
+                                "Total": _t,
+                                "✅ Con Acción": _c,
+                                "❌ Sin Acción": _s,
+                                "Cobertura": _p,
+                            })
+                        _tbl_r = pd.DataFrame(_filas_r).sort_values("Total", ascending=False)
+                        _tbl_r.index = range(1, len(_tbl_r) + 1)
+                        st.dataframe(
+                            _tbl_r,
+                            use_container_width=True,
+                            height=min(400, len(_tbl_r) * 42 + 50),
+                        )
+
+                        # Expander: listado de pozos sin acción
+                        _sin = _df_r[~_df_r["TIENE_ACCION"]].copy()
+                        if not _sin.empty:
+                            with st.expander(f"Sin acción ({len(_sin)} pozos)"):
+                                _cols_sin = [c for c in [
+                                    "NOMBRE_POZO", "BATERIA", "DIAG_SUBCATEGORIA",
+                                    "ULT_SUMERGE", "DIAG_FECHA"
+                                ] if c in _sin.columns]
+                                st.dataframe(
+                                    _sin[_cols_sin].sort_values("DIAG_SUBCATEGORIA").reset_index(drop=True),
+                                    use_container_width=True, height=200
+                                )
 
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
