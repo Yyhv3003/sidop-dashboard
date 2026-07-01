@@ -472,6 +472,29 @@ def preindexar_por_pozo(path: str):
     }
 
 
+@st.cache_data(ttl=None, show_spinner=False)
+def get_ult_diagnostico(path: str) -> pd.DataFrame:
+    """
+    Retorna el diagnóstico más reciente por pozo desde Historico_Diagnosticos.
+    Funciona aunque en el futuro haya múltiples entradas por pozo.
+    """
+    datos = load_all_data(path)
+    hd = datos.get("Historico_Diagnosticos", pd.DataFrame()).copy()
+    if hd.empty:
+        return pd.DataFrame()
+    # Normalizar nombre de columna de pozo
+    col_pozo = next((c for c in ["NOMBRE_POZO", "NOMBRE_POZ"] if c in hd.columns), None)
+    if col_pozo is None:
+        return pd.DataFrame()
+    if col_pozo != "NOMBRE_POZO":
+        hd = hd.rename(columns={col_pozo: "NOMBRE_POZO"})
+    # Ordenar por fecha descendente y tomar el más reciente por pozo
+    if "DIAG_FECHA" in hd.columns:
+        hd["DIAG_FECHA"] = pd.to_datetime(hd["DIAG_FECHA"], errors="coerce")
+        hd = hd.sort_values("DIAG_FECHA", ascending=False)
+    return hd.groupby("NOMBRE_POZO", as_index=False).first()
+
+
 try:
     datos = load_all_data(str(EXCEL_PATH))
 except FileNotFoundError:
@@ -496,6 +519,9 @@ acciones  = datos.get("Acciones",              pd.DataFrame())
 
 # Índice por pozo — lookup instantáneo al cambiar de pozo
 idx = preindexar_por_pozo(str(EXCEL_PATH))
+
+# Último diagnóstico por pozo — fuente para el análisis de sumergencia en Tab 1
+ult_diag_todos = get_ult_diagnostico(str(EXCEL_PATH))
 
 # Timestamp de actualización
 try:
@@ -581,15 +607,24 @@ tab1, tab2 = st.tabs(["📊   Resumen Operativo", "🔍   Detalle de Pozo"])
 
 with tab1:
 
-    # df_tab1: solo pozos EN EXTRACCION según Cierre Diario, excluye Pistoneo
+    # df_tab1: solo pozos EN EXTRACCION según Cierre Diario, excluye Pistoneo/Surgente
+    EXCLUIR_SISTEMAS = {"PISTONEO", "SURGENTE"}
     if "EN_EXTRACCION_CIERRE" in df.columns:
         df_tab1 = df[df["EN_EXTRACCION_CIERRE"] == True].copy()
         if "SISTEMA_EXTRACTIVO" in df_tab1.columns:
-            df_tab1 = df_tab1[df_tab1["SISTEMA_EXTRACTIVO"] != "PISTONEO"]
+            df_tab1 = df_tab1[~df_tab1["SISTEMA_EXTRACTIVO"].isin(EXCLUIR_SISTEMAS)]
     else:
-        # Fallback si el archivo fue generado sin la columna (versión antigua)
-        df_tab1 = df[df["SISTEMA_EXTRACTIVO"] != "PISTONEO"].copy() \
+        df_tab1 = df[~df["SISTEMA_EXTRACTIVO"].isin(EXCLUIR_SISTEMAS)].copy() \
             if "SISTEMA_EXTRACTIVO" in df.columns else df.copy()
+
+    # ── Último diagnóstico filtrado a los pozos de Tab 1 ──
+    if not ult_diag_todos.empty and "NOMBRE_POZO" in ult_diag_todos.columns:
+        ult_diag_t1 = ult_diag_todos[
+            ult_diag_todos["NOMBRE_POZO"].isin(df_tab1["NOMBRE_POZO"])
+        ].copy()
+    else:
+        ult_diag_t1 = pd.DataFrame()
+    _usa_diag = not ult_diag_t1.empty and "DIAG_ESTADO_OP" in ult_diag_t1.columns
 
     # ── Header ──
     st.markdown(f"""
@@ -602,18 +637,25 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── KPIs (excluye Pistoneo) ──
+    # ── KPIs — fuente: Historico_Diagnosticos (último diagnóstico por pozo) ──
     total_pozos = len(df_tab1)
-    en_potencial = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "En potencial"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
-    subexplotados = len(df_tab1[df_tab1["ESTADO_OPERATIVO"].str.contains("Subexplotado", na=False)]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
-    sin_dato = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "Sin dato de sumergencia"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
+    if _usa_diag:
+        en_potencial  = int((ult_diag_t1["DIAG_ESTADO_OP"] == "En potencial").sum())
+        subexplotados = int(ult_diag_t1["DIAG_ESTADO_OP"].str.contains("Subexplotado", na=False).sum())
+        sin_dato      = total_pozos - len(ult_diag_t1)   # pozos sin diagnóstico cargado
+    else:
+        # fallback: ESTADO_OPERATIVO calculado desde niveles
+        en_potencial  = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "En potencial"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
+        subexplotados = len(df_tab1[df_tab1["ESTADO_OPERATIVO"].str.contains("Subexplotado", na=False)]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
+        sin_dato      = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "Sin dato de sumergencia"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
 
     k1, k2, k3, k4 = st.columns(4)
+    _label_k4 = "Sin<br>Diagnóstico" if _usa_diag else "Sin Dato de<br>Sumergencia"
     for col_w, num, label in [
         (k1, total_pozos,   "Total<br>Pozos"),
         (k2, en_potencial,  "Pozos<br>En Potencial"),
         (k3, subexplotados, "Pozos<br>Sub-explotados"),
-        (k4, sin_dato,      "Sin Dato de<br>Sumergencia"),
+        (k4, sin_dato,      _label_k4),
     ]:
         with col_w:
             st.markdown(f"""
@@ -654,10 +696,17 @@ with tab1:
             st.info("Sin datos de zona.")
 
     with g2:
-        st.markdown("**Total Pozos por Estado Operativo**")
-        if "ESTADO_OPERATIVO" in df_tab1.columns and len(df_tab1) > 0:
+        st.markdown("**Estado Operativo — Diagnóstico de Sumergencia**")
+        if _usa_diag:
+            est_src = ult_diag_t1.rename(columns={"DIAG_ESTADO_OP": "ESTADO_OPERATIVO"})
+        elif "ESTADO_OPERATIVO" in df_tab1.columns:
+            est_src = df_tab1
+        else:
+            est_src = pd.DataFrame()
+
+        if not est_src.empty and "ESTADO_OPERATIVO" in est_src.columns:
             est_cnt = (
-                df_tab1.groupby("ESTADO_OPERATIVO", as_index=False)
+                est_src.groupby("ESTADO_OPERATIVO", as_index=False)
                 .size()
                 .rename(columns={"size": "Total"})
                 .sort_values("Total", ascending=False)
@@ -680,24 +729,36 @@ with tab1:
         else:
             st.info("Sin datos de estado operativo.")
 
-    # ── Gráficos Sub-categoría Diagnóstico por rango de subexplotación ──
-    if "DIAG_SUBCATEGORIA" in df_tab1.columns and "ESTADO_OPERATIVO" in df_tab1.columns:
-        rangos = [
-            ("Subexplotado bajo entre 201-400m",      C_PRIM),
-            ("Subexplotado moderado entre 401-600m",   "#E67E22"),
-            ("Subexplotado alto > 600m",               C_RED),
-        ]
+    # ── Gráficos Sub-categoría — fuente: Historico_Diagnosticos ──
+    rangos = [
+        ("Subexplotado bajo entre 201-400m",      C_PRIM),
+        ("Subexplotado moderado entre 401-600m",   "#E67E22"),
+        ("Subexplotado alto > 600m",               C_RED),
+    ]
+
+    # Elegir fuente: diagnóstico experto (preferido) o fallback en Maestro
+    if _usa_diag and "DIAG_SUBCATEGORIA" in ult_diag_t1.columns:
+        _src_sub = ult_diag_t1.copy()
+        _col_estado = "DIAG_ESTADO_OP"
+    elif "DIAG_SUBCATEGORIA" in df_tab1.columns and "ESTADO_OPERATIVO" in df_tab1.columns:
+        _src_sub = df_tab1.copy()
+        _col_estado = "ESTADO_OPERATIVO"
+    else:
+        _src_sub = pd.DataFrame()
+        _col_estado = None
+
+    if not _src_sub.empty and _col_estado:
         tiene_datos = any(
-            df_tab1["ESTADO_OPERATIVO"].str.contains(r[0], na=False).any() for r in rangos
+            _src_sub[_col_estado].str.contains(r[0], na=False).any() for r in rangos
         )
         if tiene_datos:
             st.markdown("**Distribución por Sub-categoría de Diagnóstico — Subexplotados**")
             dcols = st.columns(3)
             for col_w, (rango, color) in zip(dcols, rangos):
-                sub_df = df_tab1[
-                    df_tab1["ESTADO_OPERATIVO"].str.contains(rango, na=False, regex=False)
-                    & df_tab1["DIAG_SUBCATEGORIA"].notna()
-                    & (df_tab1["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
+                sub_df = _src_sub[
+                    _src_sub[_col_estado].str.contains(rango, na=False, regex=False)
+                    & _src_sub["DIAG_SUBCATEGORIA"].notna()
+                    & (_src_sub["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
                 ].copy()
                 with col_w:
                     label_corto = (
@@ -705,7 +766,11 @@ with tab1:
                              .replace("Subexplotado moderado entre 401-600m", "Subexplot. Moderado (401-600m)")
                              .replace("Subexplotado alto > 600m",             "Subexplot. Alto (>600m)")
                     )
-                    st.markdown(f"<div style='font-size:0.78rem; font-weight:700; color:{color}; margin-bottom:4px'>{label_corto}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='font-size:0.78rem; font-weight:700; color:{color}; margin-bottom:4px'>"
+                        f"{label_corto}</div>",
+                        unsafe_allow_html=True
+                    )
                     if sub_df.empty:
                         st.info("Sin diagnóstico registrado.")
                     else:
@@ -733,14 +798,26 @@ with tab1:
                         st.plotly_chart(fig_sub, use_container_width=True)
                         # Listado de pozos por subcategoría
                         with st.expander(f"Ver pozos ({len(sub_df)})"):
-                            cols_mostrar = [c for c in ["NOMBRE_POZO", "BATERIA", "DIAG_SUBCATEGORIA"] if c in sub_df.columns]
+                            cols_exp = [c for c in [
+                                "NOMBRE_POZO", "BATERIA", "METODO",
+                                "ULT_SUMERGE", "DIAG_SUBCATEGORIA"
+                            ] if c in sub_df.columns]
+                            # Si no hay ULT_SUMERGE, intentar SUMERGENCIA desde maestro
+                            if "ULT_SUMERGE" not in cols_exp and "NOMBRE_POZO" in sub_df.columns:
+                                sub_df = sub_df.merge(
+                                    df_tab1[["NOMBRE_POZO", "SUMERGENCIA"]].rename(
+                                        columns={"SUMERGENCIA": "SUMERG"}
+                                    ),
+                                    on="NOMBRE_POZO", how="left"
+                                )
+                                cols_exp = [c for c in cols_exp + ["SUMERG"] if c in sub_df.columns]
                             tabla_pozos = (
-                                sub_df[cols_mostrar]
+                                sub_df[cols_exp]
                                 .sort_values("DIAG_SUBCATEGORIA")
                                 .reset_index(drop=True)
                             )
                             tabla_pozos.index += 1
-                            st.dataframe(tabla_pozos, use_container_width=True, height=200)
+                            st.dataframe(tabla_pozos, use_container_width=True, height=220)
 
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
