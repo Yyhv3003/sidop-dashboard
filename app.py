@@ -422,6 +422,9 @@ def preindexar_por_pozo(path: str):
     def agrupar(df, col="NOMBRE_POZO"):
         if df.empty or col not in df.columns:
             return {}
+        # Normalizar a MAYÚSCULAS para que el lookup sea case-insensitive
+        df = df.copy()
+        df[col] = df[col].astype(str).str.strip().str.upper()
         return {k: v.reset_index(drop=True) for k, v in df.groupby(col)}
 
     # ── Tendencia Producción: fechas + numéricos + sort ──
@@ -849,33 +852,56 @@ with tab1:
 
         _acc = acciones.copy()
 
+        def _norm_col(c):
+            """Normaliza nombre de columna para comparación: mayúsculas sin tildes."""
+            return (str(c).upper()
+                    .replace("Á","A").replace("É","E").replace("Í","I")
+                    .replace("Ó","O").replace("Ú","U").replace("Ü","U"))
+
         # ── Detectar columna de nombre de pozo en Acciones ──
         _col_pa = next((c for c in _acc.columns if any(
-            p in str(c).upper() for p in ["NOMBRE_CORTO", "NOMBRE_POZO", "NOMBRE"]
+            p in _norm_col(c) for p in ["NOMBRE_CORTO", "NOMBRE_POZO", "NOMBRE", "POZO"]
         )), None)
         # ── Detectar columna de fecha en Acciones ──
-        _col_fa = next((c for c in _acc.columns if "FECHA" in str(c).upper()), None)
+        _col_fa = next((c for c in _acc.columns if any(
+            p in _norm_col(c) for p in ["FECHA", "DATE", "DIA", "INGRESO"]
+        )), None)
 
-        if _acc.empty or not _col_pa or not _col_fa:
+        _sin_fecha = _col_fa is None   # Acciones no tiene columna de fecha → conteo simple
+
+        if _acc.empty or not _col_pa:
             st.info(
-                f"No se pudo construir el cruce. "
-                f"Columnas detectadas en Acciones: `{list(_acc.columns[:8])}`"
+                f"No se pudo construir el cruce (columna de pozo no encontrada). "
+                f"Todas las columnas en Acciones: `{list(_acc.columns)}`"
             )
         else:
-            # Normalizar Acciones
-            _acc = _acc[[_col_pa, _col_fa]].copy()
-            _acc.columns = ["NOMBRE_POZO", "FECHA_ACCION"]
-            _acc["NOMBRE_POZO"]   = _acc["NOMBRE_POZO"].astype(str).str.strip()
-            _acc["FECHA_ACCION"]  = pd.to_datetime(_acc["FECHA_ACCION"], errors="coerce")
-            _acc = _acc.dropna(subset=["NOMBRE_POZO", "FECHA_ACCION"])
-            _acc = _acc[_acc["NOMBRE_POZO"].str.upper() != "NAN"]
+            # Normalizar Acciones — columna pozo siempre; fecha si existe
+            _cols_usar = [_col_pa] + ([_col_fa] if _col_fa else [])
+            _acc = _acc[_cols_usar].copy()
+            _acc.columns = ["NOMBRE_POZO"] + (["FECHA_ACCION"] if _col_fa else [])
+            _acc["NOMBRE_POZO"] = _acc["NOMBRE_POZO"].astype(str).str.strip()
+            _acc = _acc[_acc["NOMBRE_POZO"].str.upper().str.replace(" ","") != "NAN"]
 
-            # Última acción por pozo
-            _ult_acc = (
-                _acc.groupby("NOMBRE_POZO")["FECHA_ACCION"].max()
-                .reset_index()
-                .rename(columns={"FECHA_ACCION": "FECHA_ULT_ACCION"})
-            )
+            if _col_fa:
+                _acc["FECHA_ACCION"] = pd.to_datetime(_acc["FECHA_ACCION"], errors="coerce")
+                _acc = _acc.dropna(subset=["FECHA_ACCION"])
+                # Última acción por pozo
+                _ult_acc = (
+                    _acc.groupby("NOMBRE_POZO")["FECHA_ACCION"].max()
+                    .reset_index()
+                    .rename(columns={"FECHA_ACCION": "FECHA_ULT_ACCION"})
+                )
+            else:
+                # Sin columna de fecha: cualquier acción registrada cuenta
+                _ult_acc = (
+                    _acc[["NOMBRE_POZO"]].drop_duplicates()
+                    .assign(FECHA_ULT_ACCION=pd.NaT)
+                )
+                st.caption(
+                    "⚠️ La hoja Acciones no tiene columna de fecha. "
+                    f"Columnas disponibles: {list(acciones.columns)}. "
+                    "Se cuenta si el pozo tiene CUALQUIER acción registrada (sin filtro de fecha)."
+                )
 
             # Sub-explotados desde el diagnóstico
             _sub = ult_diag_t1[
@@ -890,13 +916,14 @@ with tab1:
 
             _sub = _sub.merge(_ult_acc, on="NOMBRE_POZO", how="left")
 
-            # Flag: acción POSTERIOR al diagnóstico
-            if "DIAG_FECHA" in _sub.columns:
+            # Flag: acción POSTERIOR al diagnóstico (si hay fecha en Acciones) o existente (sin fecha)
+            if not _sin_fecha and "DIAG_FECHA" in _sub.columns:
                 _sub["TIENE_ACCION"] = (
                     _sub["FECHA_ULT_ACCION"].notna()
                     & (_sub["FECHA_ULT_ACCION"] > _sub["DIAG_FECHA"])
                 )
             else:
+                # Sin fecha en Acciones: cuenta si el pozo tiene cualquier acción
                 _sub["TIENE_ACCION"] = _sub["FECHA_ULT_ACCION"].notna()
 
             # ── Construir tabla resumen ──
@@ -1111,6 +1138,9 @@ def tab2_detalle(idx, maestro, df, last_update):
     with col_pozo:
         pozo_sel = st.selectbox("🔍 Seleccionar Pozo", options=pozos_lista, key="pozo_sel")
 
+    # Normalizar nombre para lookups en idx (idx keys son siempre MAYÚSCULAS)
+    _psel_up = pozo_sel.strip().upper()
+
     # Datos del pozo seleccionado
     mask = maestro["NOMBRE_POZO"] == pozo_sel
     if not mask.any():
@@ -1200,7 +1230,7 @@ def tab2_detalle(idx, maestro, df, last_update):
         st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 
         # Tendencias de producción — ya procesadas en el cache
-        prod_pozo = idx["prod"].get(pozo_sel, pd.DataFrame())
+        prod_pozo = idx["prod"].get(_psel_up, pd.DataFrame())
 
         tc1, tc2 = st.columns(2)
 
@@ -1309,8 +1339,8 @@ def tab2_detalle(idx, maestro, df, last_update):
 
     # ══ FILA 4: Tendencia Sumergencia | Tendencia Dinamometría ══
     # Datos — ya procesados en el cache
-    niv_pozo  = idx["niv"].get(pozo_sel,  pd.DataFrame())
-    dina_pozo = idx["dina"].get(pozo_sel, pd.DataFrame())
+    niv_pozo  = idx["niv"].get(_psel_up,  pd.DataFrame())
+    dina_pozo = idx["dina"].get(_psel_up, pd.DataFrame())
 
     td1, td2 = st.columns(2)
 
@@ -1359,7 +1389,7 @@ def tab2_detalle(idx, maestro, df, last_update):
     # ══ CARTAS DINAMOMÉTRICAS ══
     st.markdown('<div class="section-title">Últimas 3 Cartas Dinamométricas</div>', unsafe_allow_html=True)
 
-    cartas_pozo = idx["cartas"].get(pozo_sel, pd.DataFrame())
+    cartas_pozo = idx["cartas"].get(_psel_up, pd.DataFrame())
 
     def mostrar_cartas(df_tipo, tipo_label, palette):
         if df_tipo.empty or "N_DINA" not in df_tipo.columns:
@@ -1414,7 +1444,7 @@ def tab2_detalle(idx, maestro, df, last_update):
         mostrar_cartas(cf, "Fondo", [C_PRIM, "#E67E22", C_NAVY])
 
     # ── Diagnóstico de Cartas ──
-    diag_pozo = idx["diag"].get(pozo_sel, pd.DataFrame())
+    diag_pozo = idx["diag"].get(_psel_up, pd.DataFrame())
     if not diag_pozo.empty:
         cols_d = [c for c in ["N_DINA", "FECHA_DINA", "DIAGNOSTICO_CARTA",
                                "COMENTARIO_CARTA", "CONFIANZA_CARTA"] if c in diag_pozo.columns]
@@ -1432,7 +1462,7 @@ def tab2_detalle(idx, maestro, df, last_update):
     # ══ HISTORIAL DE DIAGNÓSTICOS OPERATIVOS ══
     st.markdown('<div class="section-title">Historial de Diagnósticos Operativos</div>', unsafe_allow_html=True)
 
-    diag_op_pozo = idx["diag_op"].get(pozo_sel, pd.DataFrame())
+    diag_op_pozo = idx["diag_op"].get(_psel_up, pd.DataFrame())
 
     # Fallback: si la hoja Historico_Diagnosticos aún no fue generada,
     # usar las columnas DIAG_ que ya están en el maestro (último diagnóstico)
@@ -1477,7 +1507,7 @@ def tab2_detalle(idx, maestro, df, last_update):
     # ══ ÚLTIMAS INTERVENCIONES ══
     st.markdown('<div class="section-title">Últimas Intervenciones</div>', unsafe_allow_html=True)
 
-    ev_pozo = idx["eventos"].get(pozo_sel, pd.DataFrame())
+    ev_pozo = idx["eventos"].get(_psel_up, pd.DataFrame())
     if not ev_pozo.empty:
         cols_ev = [c for c in ["FECHA_INICIO", "TIPO_EVENTO", "OBSERVACION"] if c in ev_pozo.columns]
         rename_ev = {"FECHA_INICIO": "Fecha", "TIPO_EVENTO": "Tipo", "OBSERVACION": "Observación"}
