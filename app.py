@@ -581,6 +581,16 @@ tab1, tab2 = st.tabs(["📊   Resumen Operativo", "🔍   Detalle de Pozo"])
 
 with tab1:
 
+    # df_tab1: solo pozos EN EXTRACCION según Cierre Diario, excluye Pistoneo
+    if "EN_EXTRACCION_CIERRE" in df.columns:
+        df_tab1 = df[df["EN_EXTRACCION_CIERRE"] == True].copy()
+        if "SISTEMA_EXTRACTIVO" in df_tab1.columns:
+            df_tab1 = df_tab1[df_tab1["SISTEMA_EXTRACTIVO"] != "PISTONEO"]
+    else:
+        # Fallback si el archivo fue generado sin la columna (versión antigua)
+        df_tab1 = df[df["SISTEMA_EXTRACTIVO"] != "PISTONEO"].copy() \
+            if "SISTEMA_EXTRACTIVO" in df.columns else df.copy()
+
     # ── Header ──
     st.markdown(f"""
     <div class="qe-header">
@@ -592,11 +602,11 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── KPIs ──
-    total_pozos = len(df)
-    en_potencial = len(df[df["ESTADO_OPERATIVO"] == "En potencial"]) if "ESTADO_OPERATIVO" in df.columns else 0
-    subexplotados = len(df[df["ESTADO_OPERATIVO"].str.contains("Subexplotado", na=False)]) if "ESTADO_OPERATIVO" in df.columns else 0
-    sin_dato = len(df[df["ESTADO_OPERATIVO"] == "Sin dato de sumergencia"]) if "ESTADO_OPERATIVO" in df.columns else 0
+    # ── KPIs (excluye Pistoneo) ──
+    total_pozos = len(df_tab1)
+    en_potencial = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "En potencial"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
+    subexplotados = len(df_tab1[df_tab1["ESTADO_OPERATIVO"].str.contains("Subexplotado", na=False)]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
+    sin_dato = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "Sin dato de sumergencia"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
 
     k1, k2, k3, k4 = st.columns(4)
     for col_w, num, label in [
@@ -619,9 +629,9 @@ with tab1:
 
     with g1:
         st.markdown("**Total Pozos por Zona**")
-        if "ZONA" in df.columns and len(df) > 0:
+        if "ZONA" in df_tab1.columns and len(df_tab1) > 0:
             zona_cnt = (
-                df.groupby("ZONA", as_index=False)
+                df_tab1.groupby("ZONA", as_index=False)
                 .size()
                 .rename(columns={"size": "Total"})
                 .sort_values("Total", ascending=False)
@@ -645,9 +655,9 @@ with tab1:
 
     with g2:
         st.markdown("**Total Pozos por Estado Operativo**")
-        if "ESTADO_OPERATIVO" in df.columns and len(df) > 0:
+        if "ESTADO_OPERATIVO" in df_tab1.columns and len(df_tab1) > 0:
             est_cnt = (
-                df.groupby("ESTADO_OPERATIVO", as_index=False)
+                df_tab1.groupby("ESTADO_OPERATIVO", as_index=False)
                 .size()
                 .rename(columns={"size": "Total"})
                 .sort_values("Total", ascending=False)
@@ -671,23 +681,23 @@ with tab1:
             st.info("Sin datos de estado operativo.")
 
     # ── Gráficos Sub-categoría Diagnóstico por rango de subexplotación ──
-    if "DIAG_SUBCATEGORIA" in df.columns and "ESTADO_OPERATIVO" in df.columns:
+    if "DIAG_SUBCATEGORIA" in df_tab1.columns and "ESTADO_OPERATIVO" in df_tab1.columns:
         rangos = [
             ("Subexplotado bajo entre 201-400m",      C_PRIM),
             ("Subexplotado moderado entre 401-600m",   "#E67E22"),
             ("Subexplotado alto > 600m",               C_RED),
         ]
         tiene_datos = any(
-            df["ESTADO_OPERATIVO"].str.contains(r[0], na=False).any() for r in rangos
+            df_tab1["ESTADO_OPERATIVO"].str.contains(r[0], na=False).any() for r in rangos
         )
         if tiene_datos:
             st.markdown("**Distribución por Sub-categoría de Diagnóstico — Subexplotados**")
             dcols = st.columns(3)
             for col_w, (rango, color) in zip(dcols, rangos):
-                sub_df = df[
-                    df["ESTADO_OPERATIVO"].str.contains(rango, na=False, regex=False)
-                    & df["DIAG_SUBCATEGORIA"].notna()
-                    & (df["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
+                sub_df = df_tab1[
+                    df_tab1["ESTADO_OPERATIVO"].str.contains(rango, na=False, regex=False)
+                    & df_tab1["DIAG_SUBCATEGORIA"].notna()
+                    & (df_tab1["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
                 ].copy()
                 with col_w:
                     label_corto = (
@@ -735,12 +745,12 @@ with tab1:
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
     # ── Gráfico Riesgo Operacional ──
-    if "RIESGO_OPERACIONAL" in df.columns and len(df) > 0:
+    if "RIESGO_OPERACIONAL" in df_tab1.columns and len(df_tab1) > 0:
         r1, r2 = st.columns(2)
         with r1:
             st.markdown("**Distribución por Riesgo Operacional**")
             riesgo_cnt = (
-                df.groupby("RIESGO_OPERACIONAL", as_index=False)
+                df_tab1.groupby("RIESGO_OPERACIONAL", as_index=False)
                 .size()
                 .rename(columns={"size": "Total"})
             )
@@ -768,9 +778,9 @@ with tab1:
 
         with r2:
             st.markdown("**Distribución por Sistema Extractivo**")
-            if "SISTEMA_EXTRACTIVO" in df.columns:
+            if "SISTEMA_EXTRACTIVO" in df_tab1.columns:
                 sis_cnt = (
-                    df.groupby("SISTEMA_EXTRACTIVO", as_index=False)
+                    df_tab1.groupby("SISTEMA_EXTRACTIVO", as_index=False)
                     .size()
                     .rename(columns={"size": "Total"})
                     .sort_values("Total", ascending=False)
@@ -812,8 +822,8 @@ with tab1:
         "AIBRE_SOLICITACION_DE_ESTRUCT": "SOL EST (%)",
     }
 
-    cols_show = [c for c in COLS_TABLA if c in df.columns]
-    df_tabla  = df[cols_show].rename(columns=RENAME_TABLA).reset_index(drop=True)
+    cols_show = [c for c in COLS_TABLA if c in df_tab1.columns]
+    df_tabla  = df_tab1[cols_show].rename(columns=RENAME_TABLA).reset_index(drop=True)
 
     # Redondear numéricos
     for c in ["SUMERGENCIA (m)", "LLENADO BBA (%)", "EFIC VOL (%)", "SOL EST (%)"]:
