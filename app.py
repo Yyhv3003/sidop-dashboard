@@ -654,6 +654,16 @@ with tab1:
     # ── KPIs — universo: Historico_Diagnosticos (último diagnóstico por pozo) ──
     if _usa_diag:
         total_pozos   = len(ult_diag_t1)
+        # Pozos con sub-categoría asignada (col F — DIAG_SUBCATEGORIA no vacía)
+        if "DIAG_SUBCATEGORIA" in ult_diag_t1.columns:
+            _mask_sub_asig = (
+                ult_diag_t1["DIAG_SUBCATEGORIA"].notna()
+                & (ult_diag_t1["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
+                & (ult_diag_t1["DIAG_SUBCATEGORIA"].astype(str).str.upper() != "NAN")
+            )
+            total_con_diag = int(_mask_sub_asig.sum())
+        else:
+            total_con_diag = total_pozos
         en_potencial  = int((ult_diag_t1["DIAG_ESTADO_OP"] == "En potencial").sum())
         subexplotados = int(ult_diag_t1["DIAG_ESTADO_OP"].str.contains("Subexplotado", na=False).sum())
         # 4to KPI: pozos clasificados como Parado en la sub-categoría
@@ -663,16 +673,18 @@ with tab1:
     else:
         # fallback: fuente Maestro (ESTADO_OPERATIVO calculado desde niveles)
         total_pozos   = len(df_tab1)
+        total_con_diag = total_pozos
         en_potencial  = len(df_tab1[df_tab1["ESTADO_OPERATIVO"] == "En potencial"]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
         subexplotados = len(df_tab1[df_tab1["ESTADO_OPERATIVO"].str.contains("Subexplotado", na=False)]) if "ESTADO_OPERATIVO" in df_tab1.columns else 0
         parados       = 0
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     for col_w, num, label in [
-        (k1, total_pozos,   "Total<br>con Diagnóstico"),
-        (k2, en_potencial,  "Pozos<br>En Potencial"),
-        (k3, subexplotados, "Pozos<br>Sub-explotados"),
-        (k4, parados,       "Pozos<br>Parados"),
+        (k1, total_pozos,    "Total"),
+        (k2, total_con_diag, "Total<br>con Diagnóstico"),
+        (k3, en_potencial,   "Pozos<br>En Potencial"),
+        (k4, subexplotados,  "Pozos<br>Sub-explotados"),
+        (k5, parados,        "Pozos<br>Parados"),
     ]:
         with col_w:
             st.markdown(f"""
@@ -862,9 +874,9 @@ with tab1:
         _col_pa = next((c for c in _acc.columns if any(
             p in _norm_col(c) for p in ["NOMBRE_CORTO", "NOMBRE_POZO", "NOMBRE", "POZO"]
         )), None)
-        # ── Detectar columna de fecha en Acciones ──
+        # ── Detectar columna de fecha en Acciones (incluye "Fecha solicitado") ──
         _col_fa = next((c for c in _acc.columns if any(
-            p in _norm_col(c) for p in ["FECHA", "DATE", "DIA", "INGRESO"]
+            p in _norm_col(c) for p in ["FECHA", "DATE", "DIA", "INGRESO", "SOLICIT"]
         )), None)
 
         _sin_fecha = _col_fa is None   # Acciones no tiene columna de fecha → conteo simple
