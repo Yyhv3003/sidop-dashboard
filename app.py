@@ -638,6 +638,23 @@ with tab1:
             )
     else:
         ult_diag_t1 = pd.DataFrame()
+
+    # ── Aplicar filtros del sidebar a ult_diag_t1 ──
+    if not ult_diag_t1.empty:
+        # Zona y Batería están disponibles en ult_diag_t1
+        if sel_zona and "ZONA" in ult_diag_t1.columns:
+            ult_diag_t1 = ult_diag_t1[ult_diag_t1["ZONA"].isin(sel_zona)]
+        if sel_bat and "BATERIA" in ult_diag_t1.columns:
+            ult_diag_t1 = ult_diag_t1[
+                ult_diag_t1["BATERIA"].astype(str).isin([str(b) for b in sel_bat])
+            ]
+        # Sistema extractivo y Estado operativo: filtrar por NOMBRE_POZO del df ya filtrado
+        if sel_metodo or sel_estado_op:
+            _pozos_gate = set(df["NOMBRE_POZO"].astype(str).str.strip().str.upper())
+            ult_diag_t1 = ult_diag_t1[
+                ult_diag_t1["NOMBRE_POZO"].astype(str).str.strip().str.upper().isin(_pozos_gate)
+            ]
+
     _usa_diag = not ult_diag_t1.empty and "DIAG_ESTADO_OP" in ult_diag_t1.columns
 
     # ── Header ──
