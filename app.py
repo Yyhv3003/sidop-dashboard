@@ -891,8 +891,8 @@ with tab1:
             _cols_usar = [_col_pa] + ([_col_fa] if _col_fa else [])
             _acc = _acc[_cols_usar].copy()
             _acc.columns = ["NOMBRE_POZO"] + (["FECHA_ACCION"] if _col_fa else [])
-            _acc["NOMBRE_POZO"] = _acc["NOMBRE_POZO"].astype(str).str.strip()
-            _acc = _acc[_acc["NOMBRE_POZO"].str.upper().str.replace(" ","") != "NAN"]
+            _acc["NOMBRE_POZO"] = _acc["NOMBRE_POZO"].astype(str).str.strip().str.upper()
+            _acc = _acc[_acc["NOMBRE_POZO"].str.replace(" ","") != "NAN"]
 
             if _col_fa:
                 _acc["FECHA_ACCION"] = pd.to_datetime(_acc["FECHA_ACCION"], errors="coerce")
@@ -915,14 +915,13 @@ with tab1:
                     "Se cuenta si el pozo tiene CUALQUIER acción registrada (sin filtro de fecha)."
                 )
 
-            # Sub-explotados desde el diagnóstico
+            # Sub-explotados desde el diagnóstico (todos, sin importar si tienen sub-categoría)
             _sub = ult_diag_t1[
                 ult_diag_t1["DIAG_ESTADO_OP"].str.contains("Subexplotado", na=False)
-                & ult_diag_t1["DIAG_SUBCATEGORIA"].notna()
-                & (ult_diag_t1["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
             ].copy()
 
-            _sub["NOMBRE_POZO"] = _sub["NOMBRE_POZO"].astype(str).str.strip()
+            # Normalizar NOMBRE_POZO a uppercase para que el merge con Acciones funcione
+            _sub["NOMBRE_POZO"] = _sub["NOMBRE_POZO"].astype(str).str.strip().str.upper()
             if "DIAG_FECHA" in _sub.columns:
                 _sub["DIAG_FECHA"] = pd.to_datetime(_sub["DIAG_FECHA"], errors="coerce")
 
@@ -939,10 +938,11 @@ with tab1:
                 _sub["TIENE_ACCION"] = _sub["FECHA_ULT_ACCION"].notna()
 
             # ── Construir tabla resumen ──
+            # Usamos keywords únicos (bajo/moderado/alto) para capturar variaciones de texto
             _rangos_acc = [
-                ("Subexplotado bajo entre 201-400m",      "201–400 m",   C_PRIM),
-                ("Subexplotado moderado entre 401-600m",   "401–600 m",   "#E67E22"),
-                ("Subexplotado alto > 600m",               "> 600 m",     C_RED),
+                ("bajo",     "201–400 m",   C_PRIM),
+                ("moderado", "401–600 m",   "#E67E22"),
+                ("alto",     "> 600 m",     C_RED),
             ]
 
             # Métrica global
@@ -971,7 +971,7 @@ with tab1:
             _rcols = st.columns(3)
             for _rc, (_rkey, _rlabel, _rcolor) in zip(_rcols, _rangos_acc):
                 _df_r = _sub[
-                    _sub["DIAG_ESTADO_OP"].str.contains(_rkey, na=False, regex=False)
+                    _sub["DIAG_ESTADO_OP"].str.contains(_rkey, na=False, case=False)
                 ].copy()
 
                 with _rc:
@@ -988,9 +988,10 @@ with tab1:
                     if _df_r.empty:
                         st.info("Sin pozos en este rango.")
                     else:
-                        # Agrupar por sub-categoría
+                        # Agrupar por sub-categoría (incluye "Sin categoría" para NaN)
+                        _df_r["DIAG_SUBCATEGORIA"] = _df_r["DIAG_SUBCATEGORIA"].fillna("Sin categoría").replace("", "Sin categoría")
                         _filas_r = []
-                        for _sc, _grp in _df_r.groupby("DIAG_SUBCATEGORIA"):
+                        for _sc, _grp in _df_r.groupby("DIAG_SUBCATEGORIA", dropna=False):
                             _t = len(_grp)
                             _c = int(_grp["TIENE_ACCION"].sum())
                             _s = _t - _c
