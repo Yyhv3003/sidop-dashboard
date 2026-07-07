@@ -1041,6 +1041,64 @@ with tab1:
                                     use_container_width=True, height=200
                                 )
 
+    st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
+
+    # ── Antigüedad de mediciones por batería ──
+    st.markdown("**Pozos con más de 30 días sin medición — por Batería**")
+    _UMBRAL_DIAS = 30
+    _hoy_med = pd.Timestamp.today().normalize()
+    _cols_med = {
+        "FECHA_ULT_CONTROL": ("Sin Control", C_RED),
+        "FECHA_ULT_DINA":    ("Sin Dina",    C_NAVY),
+        "FECHA_ULT_NIVEL":   ("Sin Nivel",   C_PRIM),
+    }
+    _series_med = []
+    _df_med_base = df_tab1.copy() if "BATERIA_FINAL" in df_tab1.columns else pd.DataFrame()
+    for _col_f, (_label, _col_color) in _cols_med.items():
+        if not _df_med_base.empty and _col_f in _df_med_base.columns:
+            _tmp = _df_med_base[["BATERIA_FINAL", _col_f]].copy()
+            _tmp[_col_f] = pd.to_datetime(_tmp[_col_f], errors="coerce")
+            _tmp["_dias"] = (_hoy_med - _tmp[_col_f]).dt.days
+            _cnt = (
+                _tmp[_tmp["_dias"] > _UMBRAL_DIAS]
+                .groupby("BATERIA_FINAL", as_index=False)
+                .size()
+                .rename(columns={"size": "Total", "BATERIA_FINAL": "Batería"})
+            )
+            _cnt["Tipo"] = _label
+            _series_med.append((_cnt, _col_color))
+
+    if _series_med:
+        _df_plot_med = pd.concat([s for s, _ in _series_med], ignore_index=True)
+        _df_plot_med["Batería"] = _df_plot_med["Batería"].astype(str)
+        _bats_ord = sorted(
+            _df_plot_med["Batería"].unique(),
+            key=lambda x: int(x) if x.isdigit() else 9999,
+        )
+        _cmap_med = {_label: _col_color for _, (_label, _col_color) in _cols_med.items()}
+        fig_med = px.bar(
+            _df_plot_med,
+            x="Batería", y="Total",
+            color="Tipo",
+            barmode="group",
+            text="Total",
+            color_discrete_map=_cmap_med,
+            category_orders={"Batería": _bats_ord},
+        )
+        fig_med.update_traces(textposition="outside", textfont_size=10, cliponaxis=False)
+        fig_med.update_layout(
+            plot_bgcolor="white", paper_bgcolor="white",
+            height=320,
+            margin=dict(l=10, r=10, t=20, b=40),
+            xaxis_title="Batería",
+            yaxis_title=f"Pozos > {_UMBRAL_DIAS} días sin medición",
+            font=dict(family="Inter", size=11),
+            legend=dict(orientation="h", y=1.08, title_text=""),
+        )
+        st.plotly_chart(fig_med, use_container_width=True)
+    else:
+        st.info("No hay datos de fechas de medición disponibles.")
+
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
     # ── Gráfico Riesgo Operacional ──
@@ -1272,14 +1330,18 @@ def tab2_detalle(idx, maestro, df, last_update):
                     fig_prod.add_trace(go.Scatter(
                         x=prod_pozo["FECHA"], y=prod_pozo["TOTAL_LIQUIDO"],
                         name="Total Líquido",
+                        mode="lines+markers",
                         line=dict(color=C_PRIM, width=2),
+                        marker=dict(size=4, color=C_PRIM),
                         yaxis="y1",
                     ))
                 if "PROD_OIL" in prod_pozo.columns:
                     fig_prod.add_trace(go.Scatter(
                         x=prod_pozo["FECHA"], y=prod_pozo["PROD_OIL"],
                         name="Prod Oil",
+                        mode="lines+markers",
                         line=dict(color="#27AE60", width=2, dash="dot"),
+                        marker=dict(size=4, color="#27AE60"),
                         yaxis="y2",
                     ))
                 fig_prod.update_layout(
@@ -1309,7 +1371,9 @@ def tab2_detalle(idx, maestro, df, last_update):
                     prod_pozo.dropna(subset=["PCT_AGUA"]),
                     x="FECHA", y="PCT_AGUA",
                     color_discrete_sequence=[C_NAVY],
+                    markers=True,
                 )
+                fig_agua.update_traces(marker_size=4)
                 fig_agua.update_layout(
                     plot_bgcolor="white", paper_bgcolor="white",
                     height=240, margin=dict(l=10, r=10, t=10, b=10),
@@ -1328,21 +1392,34 @@ def tab2_detalle(idx, maestro, df, last_update):
         tipo_bomba_fab = str(row.get("FABRICANTE_BOMBA") or "–")
         modelo_bomba   = str(row.get("MODELO_BOMBA") or "–")
 
+        def _dias_desde(fecha_val):
+            """Devuelve string con días transcurridos desde la fecha, o '–'."""
+            try:
+                f = pd.to_datetime(fecha_val, errors="coerce")
+                if pd.isna(f):
+                    return "–"
+                dias = (pd.Timestamp.today().normalize() - f.normalize()).days
+                return f"{dias} días"
+            except Exception:
+                return "–"
+
         info_rows = {
-            "Carrera":       safe_val(row.get("AIB_CARRERA_DEL_VASTAGO"), decimals=0, suffix=" in"),
-            "Tipo AIB":      tipo_bomba_aib[:22] + "…" if len(tipo_bomba_aib) > 22 else tipo_bomba_aib,
-            "Fabricante":    tipo_bomba_fab,
-            "Modelo Bomba":  modelo_bomba[:20] + "…" if len(modelo_bomba) > 20 else modelo_bomba,
-            "Polea Motor":   safe_val(row.get("MOTOR_DIAMETRO_POLEA"), decimals=0),
-            "Prof. Bomba":   safe_val(row.get("PROF_ENT_BOMBA"), decimals=0, suffix=" m"),
-            "Régimen":       safe_val(row.get("REGIMEN_PRIM"), suffix=" GPM"),
-            "RPM Motor":     safe_val(row.get("MOTOR_RPM"), decimals=0),
-            "Último Control": safe_date(row.get("FECHA_ULT_CONTROL")),
-            "Último Dina":   safe_date(row.get("FECHA_ULT_DINA")),
-            "Último Nivel":  safe_date(row.get("FECHA_ULT_NIVEL")),
+            "Carrera":          safe_val(row.get("AIB_CARRERA_DEL_VASTAGO"), decimals=0, suffix=" in"),
+            "Tipo AIB":         tipo_bomba_aib[:22] + "…" if len(tipo_bomba_aib) > 22 else tipo_bomba_aib,
+            "Fabricante":       tipo_bomba_fab,
+            "Modelo Bomba":     modelo_bomba[:20] + "…" if len(modelo_bomba) > 20 else modelo_bomba,
+            "Polea Motor":      safe_val(row.get("MOTOR_DIAMETRO_POLEA"), decimals=0),
+            "Prof. Bomba":      safe_val(row.get("PROF_ENT_BOMBA"), decimals=0, suffix=" m"),
+            "Régimen":          safe_val(row.get("REGIMEN_PRIM"), suffix=" GPM"),
+            "RPM Motor":        safe_val(row.get("MOTOR_RPM"), decimals=0),
+            "Último Control":   safe_date(row.get("FECHA_ULT_CONTROL")),
+            "Días sin control": _dias_desde(row.get("FECHA_ULT_CONTROL")),
+            "Último Dina":      safe_date(row.get("FECHA_ULT_DINA")),
+            "Último Nivel":     safe_date(row.get("FECHA_ULT_NIVEL")),
+            "Días sin nivel":   _dias_desde(row.get("FECHA_ULT_NIVEL")),
         }
         df_info = pd.DataFrame(info_rows.items(), columns=["Atributo", "Valor"])
-        st.dataframe(df_info, use_container_width=True, hide_index=True, height=390)
+        st.dataframe(df_info, use_container_width=True, hide_index=True, height=460)
 
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
@@ -1380,7 +1457,9 @@ def tab2_detalle(idx, maestro, df, last_update):
             fig_sum = px.line(
                 niv_pozo, x="FECHA_NVL", y="SUMERGENCIA",
                 color_discrete_sequence=[C_NAVY],
+                markers=True,
             )
+            fig_sum.update_traces(marker_size=4)
             fig_sum.update_layout(
                 plot_bgcolor="white", paper_bgcolor="white",
                 height=250, margin=dict(l=10, r=10, t=10, b=10),
@@ -1398,12 +1477,18 @@ def tab2_detalle(idx, maestro, df, last_update):
             if "BBA_LLENADO_DE_BOMBA" in dina_pozo.columns:
                 fig_dyn.add_trace(go.Scatter(
                     x=dina_pozo["FECHA_DINA"], y=dina_pozo["BBA_LLENADO_DE_BOMBA"],
-                    name="Llenado BBA (%)", line=dict(color=C_NAVY, width=2),
+                    name="Llenado BBA (%)",
+                    mode="lines+markers",
+                    line=dict(color=C_NAVY, width=2),
+                    marker=dict(size=4, color=C_NAVY),
                 ))
             if "BBA_EFICIENCIA_VOLUMETRICA" in dina_pozo.columns:
                 fig_dyn.add_trace(go.Scatter(
                     x=dina_pozo["FECHA_DINA"], y=dina_pozo["BBA_EFICIENCIA_VOLUMETRICA"],
-                    name="Eficiencia Vol (%)", line=dict(color=C_RED, width=2),
+                    name="Eficiencia Vol (%)",
+                    mode="lines+markers",
+                    line=dict(color=C_RED, width=2),
+                    marker=dict(size=4, color=C_RED),
                 ))
             fig_dyn.update_layout(
                 plot_bgcolor="white", paper_bgcolor="white",
@@ -1534,20 +1619,6 @@ def tab2_detalle(idx, maestro, df, last_update):
 
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
-    # ══ ÚLTIMAS INTERVENCIONES ══
-    st.markdown('<div class="section-title">Últimas Intervenciones</div>', unsafe_allow_html=True)
-
-    ev_pozo = idx["eventos"].get(_psel_up, pd.DataFrame())
-    if not ev_pozo.empty:
-        cols_ev = [c for c in ["FECHA_INICIO", "TIPO_EVENTO", "OBSERVACION"] if c in ev_pozo.columns]
-        rename_ev = {"FECHA_INICIO": "Fecha", "TIPO_EVENTO": "Tipo", "OBSERVACION": "Observación"}
-        st.dataframe(
-            ev_pozo[cols_ev].head(5).rename(columns=rename_ev).reset_index(drop=True),
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.info("Sin intervenciones registradas para este pozo.")
-
     # ══ ÚLTIMAS ACCIONES ══
     st.markdown('<div class="section-title">Últimas Acciones</div>', unsafe_allow_html=True)
 
@@ -1582,6 +1653,22 @@ def tab2_detalle(idx, maestro, df, last_update):
             st.info("No se pudo identificar la columna de pozo en la hoja Acciones.")
     else:
         st.info("Sin datos de acciones.")
+
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+
+    # ══ ÚLTIMAS INTERVENCIONES ══
+    st.markdown('<div class="section-title">Últimas Intervenciones</div>', unsafe_allow_html=True)
+
+    ev_pozo = idx["eventos"].get(_psel_up, pd.DataFrame())
+    if not ev_pozo.empty:
+        cols_ev = [c for c in ["FECHA_INICIO", "TIPO_EVENTO", "OBSERVACION"] if c in ev_pozo.columns]
+        rename_ev = {"FECHA_INICIO": "Fecha", "TIPO_EVENTO": "Tipo", "OBSERVACION": "Observación"}
+        st.dataframe(
+            ev_pozo[cols_ev].head(5).rename(columns=rename_ev).reset_index(drop=True),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.info("Sin intervenciones registradas para este pozo.")
 
     # ══ RECOMENDACIÓN OPERATIVA (al final) ══
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
