@@ -1071,29 +1071,41 @@ with tab1:
     if _series_med:
         _df_plot_med = pd.concat([s for s, _ in _series_med], ignore_index=True)
         _df_plot_med["Batería"] = _df_plot_med["Batería"].astype(str)
-        _bats_ord = sorted(
-            _df_plot_med["Batería"].unique(),
-            key=lambda x: int(x) if x.isdigit() else 9999,
+
+        # Formato "Bat-X" en la etiqueta
+        _df_plot_med["Batería"] = "Bat-" + _df_plot_med["Batería"]
+
+        # Ordenar por total descendente (suma de los 3 tipos por batería)
+        _totales_bat = (
+            _df_plot_med.groupby("Batería")["Total"].sum()
+            .sort_values(ascending=True)  # ascending=True para barras horizontales (arriba = mayor)
         )
+        _bats_ord = _totales_bat.index.tolist()
+
         _cmap_med = {_label: _col_color for _, (_label, _col_color) in _cols_med.items()}
+
         fig_med = px.bar(
             _df_plot_med,
-            x="Batería", y="Total",
+            y="Batería",          # horizontal
+            x="Total",
             color="Tipo",
-            barmode="group",
+            barmode="stack",
             text="Total",
             color_discrete_map=_cmap_med,
             category_orders={"Batería": _bats_ord},
+            orientation="h",
         )
-        fig_med.update_traces(textposition="outside", textfont_size=10, cliponaxis=False)
+        fig_med.update_traces(textposition="inside", textfont_size=10, insidetextanchor="middle")
+        n_bats = len(_bats_ord)
+        _height_med = max(300, n_bats * 28 + 80)
         fig_med.update_layout(
             plot_bgcolor="white", paper_bgcolor="white",
-            height=320,
-            margin=dict(l=10, r=10, t=20, b=40),
-            xaxis_title="Batería",
-            yaxis_title=f"Pozos > {_UMBRAL_DIAS} días sin medición",
+            height=_height_med,
+            margin=dict(l=10, r=30, t=20, b=20),
+            xaxis_title=f"Pozos > {_UMBRAL_DIAS} días sin medición",
+            yaxis_title="",
             font=dict(family="Inter", size=11),
-            legend=dict(orientation="h", y=1.08, title_text=""),
+            legend=dict(orientation="h", y=1.04, x=0, title_text=""),
         )
         st.plotly_chart(fig_med, use_container_width=True)
     else:
