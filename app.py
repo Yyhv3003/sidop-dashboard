@@ -1072,42 +1072,36 @@ with tab1:
         _df_plot_med = pd.concat([s for s, _ in _series_med], ignore_index=True)
         _df_plot_med["Batería"] = _df_plot_med["Batería"].astype(str)
 
-        # Formato "Bat-X" en la etiqueta
-        _df_plot_med["Batería"] = "Bat-" + _df_plot_med["Batería"]
+        # Pivotar: una columna por tipo de medición
+        _tbl_med = _df_plot_med.pivot_table(
+            index="Batería", columns="Tipo", values="Total", aggfunc="sum", fill_value=0
+        ).reset_index()
 
-        # Ordenar por total descendente (suma de los 3 tipos por batería)
-        _totales_bat = (
-            _df_plot_med.groupby("Batería")["Total"].sum()
-            .sort_values(ascending=True)  # ascending=True para barras horizontales (arriba = mayor)
-        )
-        _bats_ord = _totales_bat.index.tolist()
+        # Asegurar que existan las 3 columnas aunque algún tipo no tenga datos
+        for _lbl in ["Sin Control", "Sin Dina", "Sin Nivel"]:
+            if _lbl not in _tbl_med.columns:
+                _tbl_med[_lbl] = 0
 
-        _cmap_med = {_label: _col_color for _, (_label, _col_color) in _cols_med.items()}
+        _tbl_med["_total"] = _tbl_med["Sin Control"] + _tbl_med["Sin Dina"] + _tbl_med["Sin Nivel"]
+        _tbl_med = _tbl_med.sort_values("_total", ascending=False).reset_index(drop=True)
 
-        fig_med = px.bar(
-            _df_plot_med,
-            y="Batería",          # horizontal
-            x="Total",
-            color="Tipo",
-            barmode="stack",
-            text="Total",
-            color_discrete_map=_cmap_med,
-            category_orders={"Batería": _bats_ord},
-            orientation="h",
+        # Formato "Bat-X"
+        _tbl_med["Batería"] = "Bat-" + _tbl_med["Batería"]
+
+        _tbl_med = _tbl_med[["Batería", "Sin Control", "Sin Dina", "Sin Nivel"]]
+
+        st.dataframe(
+            _tbl_med,
+            use_container_width=True,
+            hide_index=True,
+            height=min(400, len(_tbl_med) * 35 + 40),
+            column_config={
+                "Batería":     st.column_config.TextColumn("Batería"),
+                "Sin Control": st.column_config.NumberColumn("Sin Control", format="%d"),
+                "Sin Dina":    st.column_config.NumberColumn("Sin Dina",    format="%d"),
+                "Sin Nivel":   st.column_config.NumberColumn("Sin Nivel",   format="%d"),
+            },
         )
-        fig_med.update_traces(textposition="inside", textfont_size=10, insidetextanchor="middle")
-        n_bats = len(_bats_ord)
-        _height_med = max(300, n_bats * 28 + 80)
-        fig_med.update_layout(
-            plot_bgcolor="white", paper_bgcolor="white",
-            height=_height_med,
-            margin=dict(l=10, r=30, t=20, b=20),
-            xaxis_title=f"Pozos > {_UMBRAL_DIAS} días sin medición",
-            yaxis_title="",
-            font=dict(family="Inter", size=11),
-            legend=dict(orientation="h", y=1.04, x=0, title_text=""),
-        )
-        st.plotly_chart(fig_med, use_container_width=True)
     else:
         st.info("No hay datos de fechas de medición disponibles.")
 
