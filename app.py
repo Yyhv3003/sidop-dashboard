@@ -1102,6 +1102,60 @@ with tab1:
                 "Sin Nivel":   st.column_config.NumberColumn("Sin Nivel",   format="%d"),
             },
         )
+        # ── Drill-down por batería ──
+        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
+        _bats_disponibles = (
+            _df_med_base["BATERIA_FINAL"].dropna().astype(str).unique()
+            if not _df_med_base.empty else []
+        )
+        _bats_disp_fmt = sorted(
+            [b for b in _bats_disponibles if b.strip()],
+            key=lambda x: int(x) if x.isdigit() else 9999,
+        )
+        _bat_opciones = ["— Seleccionar batería —"] + [f"Bat-{b}" for b in _bats_disp_fmt]
+
+        _bat_sel = st.selectbox(
+            "🔎 Ver pozos de una batería",
+            options=_bat_opciones,
+            key="med_bat_sel",
+        )
+
+        if _bat_sel != "— Seleccionar batería —":
+            _bat_num = _bat_sel.replace("Bat-", "")
+            _df_drill = _df_med_base[
+                _df_med_base["BATERIA_FINAL"].astype(str) == _bat_num
+            ][["NOMBRE_POZO", "FECHA_ULT_CONTROL", "FECHA_ULT_DINA", "FECHA_ULT_NIVEL"]].copy()
+
+            for _fc in ["FECHA_ULT_CONTROL", "FECHA_ULT_DINA", "FECHA_ULT_NIVEL"]:
+                if _fc in _df_drill.columns:
+                    _df_drill[_fc] = pd.to_datetime(_df_drill[_fc], errors="coerce")
+                    _col_dias = _fc.replace("FECHA_ULT_", "DÍAS SIN ")
+                    _df_drill[_col_dias] = (_hoy_med - _df_drill[_fc]).dt.days
+
+            _cols_drill = ["NOMBRE_POZO"] + [
+                c for c in ["DÍAS SIN CONTROL", "DÍAS SIN DINA", "DÍAS SIN NIVEL"]
+                if c in _df_drill.columns
+            ]
+            _df_drill = (
+                _df_drill[_cols_drill]
+                .sort_values("DÍAS SIN CONTROL" if "DÍAS SIN CONTROL" in _cols_drill else _cols_drill[1],
+                             ascending=False, na_position="last")
+                .reset_index(drop=True)
+            )
+
+            st.dataframe(
+                _df_drill,
+                use_container_width=True,
+                hide_index=True,
+                height=min(420, len(_df_drill) * 35 + 40),
+                column_config={
+                    "NOMBRE_POZO":      st.column_config.TextColumn("Pozo"),
+                    "DÍAS SIN CONTROL": st.column_config.NumberColumn("Días sin control", format="%d"),
+                    "DÍAS SIN DINA":    st.column_config.NumberColumn("Días sin dina",    format="%d"),
+                    "DÍAS SIN NIVEL":   st.column_config.NumberColumn("Días sin nivel",   format="%d"),
+                },
+            )
+
     else:
         st.info("No hay datos de fechas de medición disponibles.")
 
