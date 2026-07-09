@@ -1710,6 +1710,26 @@ def tab2_detalle(idx, maestro, df, last_update):
 
     diag_op_pozo = idx["diag_op"].get(_psel_up, pd.DataFrame())
 
+    # ── Enriquecer con datos de Google Sheets (no depende del .bat) ──
+    _df_gs_all = _gs_leer_todo()
+    if not _df_gs_all.empty:
+        _df_gs_pozo = _df_gs_all[
+            _df_gs_all["NOMBRE_POZO"].astype(str).str.upper().str.strip() == _psel_up
+        ].copy()
+        if not _df_gs_pozo.empty:
+            # Mapear a columnas DIAG_ para unificar con el historial del Excel
+            _df_gs_pozo = _df_gs_pozo.rename(columns={
+                "FECHA":            "DIAG_FECHA",
+                "ESTADO_OPERATIVO": "DIAG_ESTADO_OP",
+                "SUB_CATEGORIA":    "DIAG_SUBCATEGORIA",
+                "DIAGNOSTICO":      "DIAG_TEXTO",
+                "OBSERVACION":      "DIAG_OBSERVACION",
+            })
+            _gs_cols = ["DIAG_FECHA", "DIAG_ESTADO_OP", "DIAG_SUBCATEGORIA",
+                        "DIAG_TEXTO", "DIAG_OBSERVACION"]
+            _df_gs_pozo = _df_gs_pozo[[c for c in _gs_cols if c in _df_gs_pozo.columns]]
+            diag_op_pozo = pd.concat([diag_op_pozo, _df_gs_pozo], ignore_index=True)
+
     # Fallback: si la hoja Historico_Diagnosticos aún no fue generada,
     # usar las columnas DIAG_ que ya están en el maestro (último diagnóstico)
     if diag_op_pozo.empty:
