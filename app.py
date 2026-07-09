@@ -1769,6 +1769,9 @@ def tab2_detalle(idx, maestro, df, last_update):
             "Subexplotado con limitación de reservorio",
             "Subexplotado con limitación mecánica o de equipo",
             "Parado",
+            "Subexplotado por estrategia operativa",
+            "Subexplotado con limitación por capacidad de evacuación",
+            "En Potencial",
         ]
 
         with st.form("form_nuevo_diag", clear_on_submit=True):
@@ -1930,13 +1933,14 @@ def tab2_detalle(idx, maestro, df, last_update):
         st.markdown('<div class="section-title">Instalación del Pozo</div>', unsafe_allow_html=True)
 
         # Columnas a mostrar (las que existan)
-        _cols_fondo = ["FECHA", "SARTA", "COMPONENTE", "DIAMETRO",
+        _cols_fondo = ["FECHA", "SARTA", "COMPONENTE", "DIAMETRO", "TIPO_ACERO",
                        "CONDICION", "CANTIDAD", "LONGITUD", "TOPE", "BASE"]
         _rename_fondo_disp = {
             "FECHA":      "Fecha",
             "SARTA":      "Sarta",
             "COMPONENTE": "Componente",
             "DIAMETRO":   "Diámetro",
+            "TIPO_ACERO": "Tipo Acero",
             "CONDICION":  "Condición",
             "CANTIDAD":   "Cant.",
             "LONGITUD":   "Long. (m)",
