@@ -1932,9 +1932,6 @@ def tab2_detalle(idx, maestro, df, last_update):
     if not fondo_pozo.empty:
         st.markdown('<div class="section-title">Instalación del Pozo</div>', unsafe_allow_html=True)
 
-        # Columnas a mostrar (las que existan)
-        _cols_fondo = ["FECHA", "SARTA", "COMPONENTE", "DIAMETRO", "TIPO_ACERO",
-                       "CONDICION", "CANTIDAD", "LONGITUD", "TOPE", "BASE"]
         _rename_fondo_disp = {
             "FECHA":      "Fecha",
             "SARTA":      "Sarta",
@@ -1947,12 +1944,30 @@ def tab2_detalle(idx, maestro, df, last_update):
             "TOPE":       "Tope (m)",
             "BASE":       "Base (m)",
         }
+        # Casing: todas las columnas; Tubings: sin TIPO_ACERO; Varillas: todas
+        _cols_casing  = ["FECHA", "SARTA", "COMPONENTE", "DIAMETRO", "TIPO_ACERO",
+                         "CONDICION", "CANTIDAD", "LONGITUD", "TOPE", "BASE"]
+        _cols_tubing  = ["FECHA", "SARTA", "COMPONENTE", "DIAMETRO",
+                         "CONDICION", "CANTIDAD", "LONGITUD", "TOPE", "BASE"]
+        _cols_varilla = ["FECHA", "SARTA", "COMPONENTE", "DIAMETRO", "TIPO_ACERO",
+                         "CONDICION", "CANTIDAD", "LONGITUD", "TOPE", "BASE"]
 
-        def _tabla_fondo(df_cat, titulo):
+        def _filtrar_reciente(df):
+            """Filtra solo las filas de la fecha de instalación más reciente."""
+            if df.empty or "FECHA" not in df.columns:
+                return df
+            _f = pd.to_datetime(df["FECHA"], errors="coerce")
+            _max_f = _f.max()
+            if pd.isna(_max_f):
+                return df
+            return df[_f == _max_f].copy()
+
+        def _tabla_fondo(df_cat, titulo, cols):
             if df_cat.empty:
+                st.info(f"Sin datos de {titulo} para este pozo.")
                 return
             st.markdown(f"**{titulo}**")
-            _show = [c for c in _cols_fondo if c in df_cat.columns]
+            _show = [c for c in cols if c in df_cat.columns]
             _df_show = (
                 df_cat[_show]
                 .sort_values("TOPE" if "TOPE" in _show else _show[0],
@@ -1960,7 +1975,6 @@ def tab2_detalle(idx, maestro, df, last_update):
                 .reset_index(drop=True)
                 .rename(columns=_rename_fondo_disp)
             )
-            # Formatear fecha
             if "Fecha" in _df_show.columns:
                 _df_show["Fecha"] = pd.to_datetime(
                     _df_show["Fecha"], errors="coerce"
@@ -1981,21 +1995,24 @@ def tab2_detalle(idx, maestro, df, last_update):
                 return "VARILLAS"
             return "CASING"
 
-        fondo_pozo["_CAT"] = fondo_pozo["SARTA"].apply(_cat) \
-            if "SARTA" in fondo_pozo.columns \
-            else fondo_pozo["ASS_NAME"].apply(_cat)
+        _col_sarta = "SARTA" if "SARTA" in fondo_pozo.columns else "ASS_NAME"
+        fondo_pozo["_CAT"] = fondo_pozo[_col_sarta].apply(_cat)
+
+        _df_casing  = fondo_pozo[fondo_pozo["_CAT"] == "CASING"].copy()
+        _df_tubing  = _filtrar_reciente(fondo_pozo[fondo_pozo["_CAT"] == "TUBING"].copy())
+        _df_varilla = _filtrar_reciente(fondo_pozo[fondo_pozo["_CAT"] == "VARILLAS"].copy())
 
         _f1, _f2, _f3 = st.tabs([
             "🔩 Instalación de Casing",
-            "🚿 Instalación de Tubings",
+            "🔧 Instalación de Tubings",
             "⚙ Instalación de Varillas",
         ])
         with _f1:
-            _tabla_fondo(fondo_pozo[fondo_pozo["_CAT"] == "CASING"].copy(), "Casing")
+            _tabla_fondo(_df_casing,  "Casing",   _cols_casing)
         with _f2:
-            _tabla_fondo(fondo_pozo[fondo_pozo["_CAT"] == "TUBING"].copy(), "Tubings")
+            _tabla_fondo(_df_tubing,  "Tubings",  _cols_tubing)
         with _f3:
-            _tabla_fondo(fondo_pozo[fondo_pozo["_CAT"] == "VARILLAS"].copy(), "Varillas")
+            _tabla_fondo(_df_varilla, "Varillas", _cols_varilla)
 
         st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
