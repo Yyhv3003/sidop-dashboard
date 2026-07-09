@@ -14,6 +14,76 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────
+# GOOGLE SHEETS — conexión y escritura
+# ─────────────────────────────────────────────────────────────
+
+GSHEET_ID     = "1mxpo5yWoel-kzuJ-BPNpNjxBtKF2oEIzSpP4sw6XpVg"
+GSHEET_TAB    = "Diagnosticos"
+_GS_HEADERS   = [
+    "NOMBRE_POZO", "FECHA", "ESTADO_OPERATIVO",
+    "SUB_CATEGORIA", "DIAGNOSTICO", "OBSERVACION", "REGISTRADO_POR",
+]
+
+@st.cache_resource(show_spinner=False)
+def _gs_client():
+    """Retorna un cliente gspread autenticado via service account."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]),
+            scopes=scopes,
+        )
+        return gspread.authorize(creds)
+    except Exception:
+        return None
+
+def _gs_sheet():
+    """Devuelve la worksheet 'Diagnosticos', creando encabezados si está vacía."""
+    gc = _gs_client()
+    if gc is None:
+        return None
+    try:
+        sh  = gc.open_by_key(GSHEET_ID)
+        try:
+            ws = sh.worksheet(GSHEET_TAB)
+        except Exception:
+            ws = sh.add_worksheet(title=GSHEET_TAB, rows=2000, cols=20)
+        # Si la hoja está vacía, agrega encabezados
+        if ws.row_count < 1 or not ws.row_values(1):
+            ws.append_row(_GS_HEADERS, value_input_option="RAW")
+        return ws
+    except Exception:
+        return None
+
+def _gs_append(row_dict: dict) -> bool:
+    """Agrega una fila al Google Sheet. Devuelve True si tuvo éxito."""
+    ws = _gs_sheet()
+    if ws is None:
+        return False
+    try:
+        row = [str(row_dict.get(h, "")) for h in _GS_HEADERS]
+        ws.append_row(row, value_input_option="RAW")
+        return True
+    except Exception:
+        return False
+
+def _gs_leer_todo() -> pd.DataFrame:
+    """Lee todos los diagnósticos del Google Sheet como DataFrame."""
+    ws = _gs_sheet()
+    if ws is None:
+        return pd.DataFrame(columns=_GS_HEADERS)
+    try:
+        records = ws.get_all_records()
+        return pd.DataFrame(records) if records else pd.DataFrame(columns=_GS_HEADERS)
+    except Exception:
+        return pd.DataFrame(columns=_GS_HEADERS)
+
+# ─────────────────────────────────────────────────────────────
 # CONFIGURACIÓN
 # ─────────────────────────────────────────────────────────────
 
@@ -472,6 +542,7 @@ def preindexar_por_pozo(path: str):
         "cartas":  agrupar(raw_cartas),
         "diag":    agrupar(datos.get("Diagnostico_Cartas",      pd.DataFrame())),
         "diag_op": agrupar(datos.get("Historico_Diagnosticos",  pd.DataFrame())),
+        "fondo":   agrupar(datos.get("Datos_Fondo",             pd.DataFrame())),
     }
 
 
@@ -1677,6 +1748,128 @@ def tab2_detalle(idx, maestro, df, last_update):
     else:
         st.info("Sin diagnósticos registrados para este pozo.")
 
+    # ══ NUEVO DIAGNÓSTICO ══
+    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+    with st.expander("➕ Cargar nuevo diagnóstico", expanded=False):
+
+        # Inicializar acumulador en session_state
+        if "nuevos_diagnosticos" not in st.session_state:
+            st.session_state["nuevos_diagnosticos"] = []
+
+        _ESTADOS_OP = [
+            "En potencial",
+            "Subexplotado bajo entre 201-400m",
+            "Subexplotado moderado entre 401-600m",
+            "Subexplotado alto > 600m",
+            "Parado",
+        ]
+        _SUBCATS = [
+            "",
+            "Subexplotado optimizable en superficie",
+            "Subexplotado con limitación de reservorio",
+            "Subexplotado con limitación mecánica o de equipo",
+            "Parado",
+        ]
+
+        with st.form("form_nuevo_diag", clear_on_submit=True):
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                _diag_pozo = st.text_input(
+                    "Pozo", value=pozo_sel, disabled=True
+                )
+                _diag_estado = st.selectbox("Estado operativo", options=_ESTADOS_OP)
+                _diag_texto = st.text_area("Diagnóstico", height=90)
+            with _fc2:
+                _diag_fecha = st.date_input(
+                    "Fecha", value=datetime.today().date()
+                )
+                _diag_subcat = st.selectbox("Sub-categoría", options=_SUBCATS)
+                _diag_obs = st.text_area("Observación / Recomendación", height=90)
+
+            _diag_autor = st.text_input("Registrado por", value="", placeholder="Tu nombre")
+            _submitted = st.form_submit_button(
+                "💾 Guardar diagnóstico", use_container_width=True
+            )
+
+        if _submitted:
+            if not _diag_texto.strip():
+                st.warning("El texto del diagnóstico no puede estar vacío.")
+            else:
+                _nueva_fila = {
+                    "NOMBRE_POZO":      pozo_sel.upper(),
+                    "FECHA":            str(_diag_fecha),
+                    "ESTADO_OPERATIVO": _diag_estado,
+                    "SUB_CATEGORIA":    _diag_subcat,
+                    "DIAGNOSTICO":      _diag_texto.strip(),
+                    "OBSERVACION":      _diag_obs.strip(),
+                    "REGISTRADO_POR":   _diag_autor.strip(),
+                }
+                st.session_state["nuevos_diagnosticos"].append(_nueva_fila)
+                _ok_gs = _gs_append(_nueva_fila)
+                if _ok_gs:
+                    st.success(f"✅ Diagnóstico guardado para **{pozo_sel}** en Google Sheets.")
+                else:
+                    st.warning(
+                        f"✅ Diagnóstico guardado en sesión. "
+                        "⚠️ No se pudo escribir en Google Sheets — revisá la conexión."
+                    )
+
+        # ── Registros guardados en Google Sheets ──
+        _COL_RENAME = {
+            "NOMBRE_POZO":      "Pozo",
+            "FECHA":            "Fecha",
+            "ESTADO_OPERATIVO": "Estado",
+            "SUB_CATEGORIA":    "Sub-cat.",
+            "DIAGNOSTICO":      "Diagnóstico",
+            "OBSERVACION":      "Observación",
+            "REGISTRADO_POR":   "Por",
+        }
+        _df_gs = _gs_leer_todo()
+        if not _df_gs.empty:
+            st.markdown(f"**📋 Historial en Google Sheets — {len(_df_gs)} registro(s) totales:**")
+            st.dataframe(
+                _df_gs.rename(columns=_COL_RENAME),
+                use_container_width=True,
+                hide_index=True,
+                height=min(350, len(_df_gs) * 35 + 45),
+            )
+            # Exportar todo lo que hay en GSheets como CSV
+            _csv_bytes_gs = (
+                _df_gs.to_csv(index=False, sep=";", encoding="utf-8-sig")
+                .encode("utf-8-sig")
+            )
+            st.download_button(
+                label="⬇ Exportar todo el historial (CSV)",
+                data=_csv_bytes_gs,
+                file_name=f"diagnosticos_historial_{datetime.today().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        elif st.session_state["nuevos_diagnosticos"]:
+            # Fallback: mostrar solo lo de la sesión si GSheets no responde
+            _df_nuevos = pd.DataFrame(st.session_state["nuevos_diagnosticos"])
+            st.markdown(f"**{len(_df_nuevos)} registro(s) en esta sesión (sin conexión a Sheets):**")
+            st.dataframe(
+                _df_nuevos.rename(columns=_COL_RENAME),
+                use_container_width=True,
+                hide_index=True,
+                height=min(300, len(_df_nuevos) * 35 + 40),
+            )
+            _csv_bytes = (
+                _df_nuevos.to_csv(index=False, sep=";", encoding="utf-8-sig")
+                .encode("utf-8-sig")
+            )
+            st.download_button(
+                label="⬇ Exportar CSV de esta sesión",
+                data=_csv_bytes,
+                file_name=f"diagnosticos_{datetime.today().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+            if st.button("🗑 Limpiar registros de la sesión", use_container_width=True):
+                st.session_state["nuevos_diagnosticos"] = []
+                st.rerun()
+
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
     # ══ ÚLTIMAS ACCIONES ══
@@ -1729,6 +1922,78 @@ def tab2_detalle(idx, maestro, df, last_update):
         )
     else:
         st.info("Sin intervenciones registradas para este pozo.")
+
+    # ══ INSTALACIÓN DEL POZO — Datos Fondo ══
+    fondo_pozo = idx["fondo"].get(_psel_up, pd.DataFrame())
+
+    if not fondo_pozo.empty:
+        st.markdown('<div class="section-title">Instalación del Pozo</div>', unsafe_allow_html=True)
+
+        # Columnas a mostrar (las que existan)
+        _cols_fondo = ["FECHA", "SARTA", "COMPONENTE", "DIAMETRO",
+                       "CONDICION", "CANTIDAD", "LONGITUD", "TOPE", "BASE"]
+        _rename_fondo_disp = {
+            "FECHA":      "Fecha",
+            "SARTA":      "Sarta",
+            "COMPONENTE": "Componente",
+            "DIAMETRO":   "Diámetro",
+            "CONDICION":  "Condición",
+            "CANTIDAD":   "Cant.",
+            "LONGITUD":   "Long. (m)",
+            "TOPE":       "Tope (m)",
+            "BASE":       "Base (m)",
+        }
+
+        def _tabla_fondo(df_cat, titulo):
+            if df_cat.empty:
+                return
+            st.markdown(f"**{titulo}**")
+            _show = [c for c in _cols_fondo if c in df_cat.columns]
+            _df_show = (
+                df_cat[_show]
+                .sort_values("TOPE" if "TOPE" in _show else _show[0],
+                             ascending=True, na_position="last")
+                .reset_index(drop=True)
+                .rename(columns=_rename_fondo_disp)
+            )
+            # Formatear fecha
+            if "Fecha" in _df_show.columns:
+                _df_show["Fecha"] = pd.to_datetime(
+                    _df_show["Fecha"], errors="coerce"
+                ).dt.strftime("%d/%m/%Y").fillna("–")
+            st.dataframe(
+                _df_show,
+                use_container_width=True,
+                hide_index=True,
+                height=min(350, len(_df_show) * 35 + 40),
+            )
+
+        # Clasificar por categoría de sarta
+        def _cat(ass):
+            a = str(ass).upper()
+            if any(k in a for k in ["TUBING", "TBG"]):
+                return "TUBING"
+            if any(k in a for k in ["VARILLA", "VASTAGO", "ROD"]):
+                return "VARILLAS"
+            return "CASING"
+
+        fondo_pozo["_CAT"] = fondo_pozo["SARTA"].apply(_cat) \
+            if "SARTA" in fondo_pozo.columns \
+            else fondo_pozo["ASS_NAME"].apply(_cat)
+
+        _f1, _f2, _f3 = st.tabs([
+            "🔩 Instalación de Casing",
+            "🚿 Instalación de Tubings",
+            "⚙ Instalación de Varillas",
+        ])
+        with _f1:
+            _tabla_fondo(fondo_pozo[fondo_pozo["_CAT"] == "CASING"].copy(), "Casing")
+        with _f2:
+            _tabla_fondo(fondo_pozo[fondo_pozo["_CAT"] == "TUBING"].copy(), "Tubings")
+        with _f3:
+            _tabla_fondo(fondo_pozo[fondo_pozo["_CAT"] == "VARILLAS"].copy(), "Varillas")
+
+        st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
     # ══ RECOMENDACIÓN OPERATIVA (al final) ══
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
