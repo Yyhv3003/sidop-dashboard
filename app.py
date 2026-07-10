@@ -2026,10 +2026,15 @@ def tab2_detalle(idx, maestro, df, last_update):
                 return
             st.markdown(f"**{titulo}**")
             _show = [c for c in cols if c in df_cat.columns]
+            _tmp = df_cat[_show].copy()
+            # Forzar columnas numéricas a float para ordenar correctamente
+            for _nc in ["TOPE", "BASE", "LONGITUD", "DIAMETRO", "CANTIDAD"]:
+                if _nc in _tmp.columns:
+                    _tmp[_nc] = pd.to_numeric(_tmp[_nc], errors="coerce")
+            _sort_col = "TOPE" if "TOPE" in _show else _show[0]
             _df_show = (
-                df_cat[_show]
-                .sort_values("TOPE" if "TOPE" in _show else _show[0],
-                             ascending=True, na_position="last")
+                _tmp
+                .sort_values(_sort_col, ascending=True, na_position="last")
                 .reset_index(drop=True)
                 .rename(columns=_rename_fondo_disp)
             )
