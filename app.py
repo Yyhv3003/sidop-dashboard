@@ -482,11 +482,14 @@ def load_all_data(path: str):
     hojas = {}
     for sheet in xl.sheet_names:
         df = xl.parse(sheet)
-        # Normalizar columnas object con tipos mixtos (int+str) → str
-        # Evita ArrowTypeError al serializar con pyarrow
+        # Normalizar columnas object: asegurar que todos los valores sean str o NaN
+        # Evita ArrowTypeError al serializar con pyarrow (int mezclado con str)
         for col in df.select_dtypes(include="object").columns:
-            if df[col].apply(type).nunique() > 1:
-                df[col] = df[col].astype(str).replace("nan", "").replace("<NA>", "")
+            def _a_str(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return np.nan
+                return str(v)
+            df[col] = df[col].map(_a_str)
         hojas[sheet] = df
     return hojas
 
