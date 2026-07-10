@@ -479,7 +479,16 @@ def color_riesgo(val):
 @st.cache_data(ttl=None, show_spinner="Cargando datos desde Excel...")
 def load_all_data(path: str):
     xl = pd.ExcelFile(path)
-    return {sheet: xl.parse(sheet) for sheet in xl.sheet_names}
+    hojas = {}
+    for sheet in xl.sheet_names:
+        df = xl.parse(sheet)
+        # Normalizar columnas object con tipos mixtos (int+str) → str
+        # Evita ArrowTypeError al serializar con pyarrow
+        for col in df.select_dtypes(include="object").columns:
+            if df[col].apply(type).nunique() > 1:
+                df[col] = df[col].astype(str).replace("nan", "").replace("<NA>", "")
+        hojas[sheet] = df
+    return hojas
 
 
 @st.cache_data(ttl=None, show_spinner="Indexando y procesando datos...")
