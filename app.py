@@ -117,17 +117,30 @@ GDRIVE_FILE_ID = "1bur7CrEDEy5BjC4dV-FwK2Bi49XPt3yu"
 EXCEL_PATH = Path("/tmp/Diagnostico_Pozos_PowerBI.xlsx")
 
 def descargar_excel():
-    """Descarga el Excel desde Google Drive si no existe localmente."""
-    if not EXCEL_PATH.exists():
+    """Descarga el Excel desde Google Drive si no existe o está corrupto."""
+    necesita_descarga = not EXCEL_PATH.exists() or EXCEL_PATH.stat().st_size < 10_000
+    if necesita_descarga:
         try:
             import gdown
+            # Borrar archivo previo corrupto si existe
+            if EXCEL_PATH.exists():
+                EXCEL_PATH.unlink()
             url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
-            gdown.download(url, str(EXCEL_PATH), quiet=True)
+            gdown.download(url, str(EXCEL_PATH), quiet=True, fuzzy=True)
+            # Validar que el descargado es un Excel real (firma XLSX = PK)
+            if EXCEL_PATH.exists() and EXCEL_PATH.stat().st_size > 10_000:
+                with open(EXCEL_PATH, "rb") as f:
+                    header = f.read(4)
+                if header[:2] != b"PK":
+                    EXCEL_PATH.unlink()
+                    st.error("❌ El archivo descargado no es un Excel válido. Verificá los permisos de Google Drive.")
+                    st.stop()
+            else:
+                st.error("❌ La descarga del archivo falló o el archivo está vacío.")
+                st.stop()
         except Exception as e:
-            st.error(f"No se pudo descargar el archivo de datos: {e}")
+            st.error(f"❌ No se pudo descargar el archivo de datos: {e}")
             st.stop()
-
-descargar_excel()
 
 # Quintana Energy — Brand Colors
 C_DARK   = "#33492D"   # Verde Bosque  → header
@@ -150,6 +163,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Descarga el Excel DESPUÉS de set_page_config para que cualquier error
+# muestre un mensaje legible en lugar de "Oh no."
+descargar_excel()
 
 # ─────────────────────────────────────────────────────────────
 # CSS
