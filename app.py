@@ -25,14 +25,9 @@ def _sanitize_df_for_arrow(df):
         df = df.copy()
         for col in df.columns:
             if df[col].dtype == object:
-                def _safe_str(x):
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except (TypeError, ValueError):
-                        pass
-                    return str(x)
-                df[col] = df[col].apply(_safe_str)
+                df[col] = df[col].astype(str).replace(
+                    {"nan": "", "None": "", "<NA>": ""}
+                )
     except Exception:
         pass
     return df
