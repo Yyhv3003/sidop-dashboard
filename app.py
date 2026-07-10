@@ -14,6 +14,37 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────
+# PYARROW WORKAROUND — columnas object con tipos mixtos (int+str)
+# causan ArrowTypeError + segfault en pyarrow>=25. Se intercepta
+# st.dataframe para normalizar tipos antes de serializar.
+# ─────────────────────────────────────────────────────────────
+
+def _sanitize_df_for_arrow(df):
+    """Convierte columnas object con tipos mixtos a str puro."""
+    try:
+        df = df.copy()
+        for col in df.columns:
+            if df[col].dtype == object:
+                def _safe_str(x):
+                    try:
+                        if pd.isna(x):
+                            return None
+                    except (TypeError, ValueError):
+                        pass
+                    return str(x)
+                df[col] = df[col].apply(_safe_str)
+    except Exception:
+        pass
+    return df
+
+_orig_st_dataframe = st.dataframe
+def _st_dataframe_safe(data=None, *args, **kwargs):
+    if data is not None and hasattr(data, "columns"):
+        data = _sanitize_df_for_arrow(data)
+    return _orig_st_dataframe(data, *args, **kwargs)
+st.dataframe = _st_dataframe_safe
+
+# ─────────────────────────────────────────────────────────────
 # GOOGLE SHEETS — conexión y escritura
 # ─────────────────────────────────────────────────────────────
 
