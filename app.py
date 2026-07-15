@@ -117,29 +117,74 @@ GDRIVE_FILE_ID = "1bur7CrEDEy5BjC4dV-FwK2Bi49XPt3yu"
 EXCEL_PATH = Path("/tmp/Diagnostico_Pozos_PowerBI.xlsx")
 
 def descargar_excel():
-    """Descarga el Excel desde Google Drive si no existe o está corrupto."""
+    """Descarga el Excel desde Google Drive usando la service account (más confiable que gdown)."""
     necesita_descarga = not EXCEL_PATH.exists() or EXCEL_PATH.stat().st_size < 10_000
-    if necesita_descarga:
+    if not necesita_descarga:
+        return
+
+    # Intentar con Google Drive API (service account) — no requiere que el archivo sea público
+    try:
+        from google.oauth2.service_account import Credentials as SACredentials
+        import google.auth.transport.requests as gatr
+        import requests as _req
+
+        _scopes = ["https://www.googleapis.com/auth/drive.readonly"]
+        _creds = SACredentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]),
+            scopes=_scopes,
+        )
+        _auth_req = gatr.Request()
+        _creds.refresh(_auth_req)
+
+        _url = f"https://www.googleapis.com/drive/v3/files/{GDRIVE_FILE_ID}?alt=media"
+        _headers = {"Authorization": f"Bearer {_creds.token}"}
+        _r = _req.get(_url, headers=_headers, timeout=60, stream=True)
+        _r.raise_for_status()
+
+        if EXCEL_PATH.exists():
+            EXCEL_PATH.unlink()
+        with open(str(EXCEL_PATH), "wb") as _f:
+            for _chunk in _r.iter_content(chunk_size=32768):
+                if _chunk:
+                    _f.write(_chunk)
+
+        # Validar que es un Excel real (firma XLSX = ZIP = "PK")
+        if EXCEL_PATH.exists() and EXCEL_PATH.stat().st_size > 10_000:
+            with open(EXCEL_PATH, "rb") as _fv:
+                _hdr = _fv.read(4)
+            if _hdr[:2] != b"PK":
+                EXCEL_PATH.unlink()
+                st.error("❌ El archivo descargado no es un Excel válido.")
+                st.stop()
+        else:
+            st.error("❌ La descarga del archivo falló o el archivo está vacío.")
+            st.stop()
+        return  # éxito via service account
+
+    except Exception as _e1:
+        # Fallback: intentar con gdown (requiere que el archivo sea público)
         try:
             import gdown
-            # Borrar archivo previo corrupto si existe
             if EXCEL_PATH.exists():
                 EXCEL_PATH.unlink()
-            url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
-            gdown.download(url, str(EXCEL_PATH), quiet=True, fuzzy=True)
-            # Validar que el descargado es un Excel real (firma XLSX = PK)
+            _url_gd = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
+            gdown.download(_url_gd, str(EXCEL_PATH), quiet=True, fuzzy=True)
             if EXCEL_PATH.exists() and EXCEL_PATH.stat().st_size > 10_000:
-                with open(EXCEL_PATH, "rb") as f:
-                    header = f.read(4)
-                if header[:2] != b"PK":
+                with open(EXCEL_PATH, "rb") as _fv2:
+                    _hdr2 = _fv2.read(4)
+                if _hdr2[:2] != b"PK":
                     EXCEL_PATH.unlink()
-                    st.error("❌ El archivo descargado no es un Excel válido. Verificá los permisos de Google Drive.")
+                    st.error("❌ El archivo descargado no es un Excel válido.")
                     st.stop()
             else:
-                st.error("❌ La descarga del archivo falló o el archivo está vacío.")
+                st.error(
+                    f"❌ No se pudo descargar el archivo (error service account: {_e1}).\n\n"
+                    "Verificá que el archivo de Google Drive está compartido con la service account "
+                    "o que es público."
+                )
                 st.stop()
-        except Exception as e:
-            st.error(f"❌ No se pudo descargar el archivo de datos: {e}")
+        except Exception as _e2:
+            st.error(f"❌ No se pudo descargar el archivo:\n- Service account: {_e1}\n- gdown: {_e2}")
             st.stop()
 
 # Quintana Energy — Brand Colors
@@ -519,7 +564,7 @@ def color_riesgo(val):
 # CARGA DE DATOS
 # ─────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=None, show_spinner="Cargando datos desde Excel...")
+@st.cache_data(ttl=3600, show_spinner="Cargando datos desde Excel...")
 def load_all_data(path: str):
     xl = pd.ExcelFile(path)
     hojas = {}
@@ -537,7 +582,6 @@ def load_all_data(path: str):
     return hojas
 
 
-@st.cache_data(ttl=None, show_spinner="Indexando y procesando datos...")
 def preindexar_por_pozo(path: str):
     """Pre-agrupa y pre-procesa todas las hojas por NOMBRE_POZO.
     Fechas, tipos y ordenamiento se hacen UNA SOLA VEZ aquí dentro del cache.
@@ -601,7 +645,6 @@ def preindexar_por_pozo(path: str):
     }
 
 
-@st.cache_data(ttl=None, show_spinner=False)
 def get_ult_diagnostico(path: str) -> pd.DataFrame:
     """
     Retorna el diagnóstico más reciente por pozo desde Historico_Diagnosticos.
@@ -647,10 +690,18 @@ diag_cart = datos.get("Diagnostico_Cartas",    pd.DataFrame())
 acciones  = datos.get("Acciones",              pd.DataFrame())
 
 # Índice por pozo — lookup instantáneo al cambiar de pozo
-idx = preindexar_por_pozo(str(EXCEL_PATH))
+try:
+    idx = preindexar_por_pozo(str(EXCEL_PATH))
+except Exception as e:
+    st.error(f"❌ Error al procesar el índice de pozos: {e}")
+    st.stop()
 
 # Último diagnóstico por pozo — fuente para el análisis de sumergencia en Tab 1
-ult_diag_todos = get_ult_diagnostico(str(EXCEL_PATH))
+try:
+    ult_diag_todos = get_ult_diagnostico(str(EXCEL_PATH))
+except Exception as e:
+    st.warning(f"⚠️ No se pudo cargar el historial de diagnósticos: {e}")
+    ult_diag_todos = pd.DataFrame()
 
 # Timestamp de actualización
 try:
