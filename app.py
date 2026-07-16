@@ -564,20 +564,19 @@ def color_riesgo(val):
 # CARGA DE DATOS
 # ─────────────────────────────────────────────────────────────
 
-@st.cache_resource(ttl=3600, show_spinner=True)
+@st.cache_data(ttl=3600, show_spinner="Cargando datos desde Excel...")
 def load_all_data(path: str):
     xl = pd.ExcelFile(path)
     hojas = {}
     for sheet in xl.sheet_names:
         df = xl.parse(sheet)
-        # Normalizar columnas object: asegurar que todos los valores sean str o NaN
-        # Evita ArrowTypeError al serializar con pyarrow (int mezclado con str)
+        # Normalizar object: vectorizado (evita allocations por celda)
         for col in df.select_dtypes(include="object").columns:
-            def _a_str(v):
-                if v is None or (isinstance(v, float) and np.isnan(v)):
-                    return np.nan
-                return str(v)
-            df[col] = df[col].map(_a_str)
+            _mask_na = df[col].isna()
+            df[col] = df[col].astype(str).where(~_mask_na, np.nan)
+        # Reducir float64 → float32 (mitad de memoria, suficiente para visualización)
+        for col in df.select_dtypes(include="float64").columns:
+            df[col] = df[col].astype("float32")
         hojas[sheet] = df
     return hojas
 
