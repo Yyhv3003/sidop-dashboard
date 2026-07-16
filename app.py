@@ -579,6 +579,7 @@ def load_all_data(path: str):
             df[col] = df[col].map(_a_str)
 
 
+@st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
 def preindexar_por_pozo(path: str):
     """Pre-agrupa y pre-procesa todas las hojas por NOMBRE_POZO.
     Fechas, tipos y ordenamiento se hacen UNA SOLA VEZ aquí dentro del cache.
@@ -642,6 +643,7 @@ def preindexar_por_pozo(path: str):
     }
 
 
+@st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
 def get_ult_diagnostico(path: str) -> pd.DataFrame:
     """
     Retorna el diagnóstico más reciente por pozo desde Historico_Diagnosticos.
