@@ -570,15 +570,13 @@ def load_all_data(path: str):
     hojas = {}
     for sheet in xl.sheet_names:
         df = xl.parse(sheet)
-        # Normalizar object: vectorizado (evita allocations por celda)
+        # Normalizar columnas object: asegurar que todos los valores sean str o NaN
         for col in df.select_dtypes(include="object").columns:
-            _mask_na = df[col].isna()
-            df[col] = df[col].astype(str).where(~_mask_na, np.nan)
-        # Reducir float64 → float32 (mitad de memoria, suficiente para visualización)
-        for col in df.select_dtypes(include="float64").columns:
-            df[col] = df[col].astype("float32")
-        hojas[sheet] = df
-    return hojas
+            def _a_str(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return np.nan
+                return str(v)
+            df[col] = df[col].map(_a_str)
 
 
 def preindexar_por_pozo(path: str):
