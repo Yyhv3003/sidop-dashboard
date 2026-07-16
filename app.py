@@ -564,7 +564,7 @@ def color_riesgo(val):
 # CARGA DE DATOS
 # ─────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, max_entries=1, show_spinner="Cargando datos desde Excel...")
+@st.cache_resource(show_spinner="Cargando datos desde Excel...")
 def load_all_data(path: str):
     # Solo cargar las hojas que realmente usa la app — ahorra memoria
     HOJAS_NECESARIAS = {
@@ -588,6 +588,7 @@ def load_all_data(path: str):
                 return str(v)
             df[col] = df[col].map(_a_str)
         hojas[sheet] = df
+    del xl  # Liberar el objeto ExcelFile apenas terminamos de parsear
     return hojas
 
 
@@ -765,7 +766,7 @@ with st.sidebar:
     if st.button("🔄 Actualizar datos", use_container_width=True, type="primary"):
         if EXCEL_PATH.exists():
             EXCEL_PATH.unlink()   # borra local → fuerza re-descarga desde Drive
-        st.cache_data.clear()
+        load_all_data.clear()
         st.rerun()
     st.caption(f"Última actualización: {last_update}")
 
