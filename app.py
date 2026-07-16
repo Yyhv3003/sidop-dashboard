@@ -756,6 +756,7 @@ with st.sidebar:
         if EXCEL_PATH.exists():
             EXCEL_PATH.unlink()   # borra local → fuerza re-descarga desde Drive
         st.cache_data.clear()
+        st.cache_resource.clear()
         st.rerun()
     st.caption(f"Última actualización: {last_update}")
 
