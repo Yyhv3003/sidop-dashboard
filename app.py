@@ -564,22 +564,33 @@ def color_riesgo(val):
 # CARGA DE DATOS
 # ─────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner="Cargando datos desde Excel...")
+@st.cache_data(ttl=3600, max_entries=1, show_spinner="Cargando datos desde Excel...")
 def load_all_data(path: str):
+    # Solo cargar las hojas que realmente usa la app — ahorra memoria
+    HOJAS_NECESARIAS = {
+        "Maestro_Pozos", "Tendencia_Niveles", "Tendencia_Produccion",
+        "Tendencia_Dinamometria", "Eventos_Riesgo", "Dinas_Cartas_Ultimas3",
+        "Diagnostico_Cartas", "Acciones", "Historico_Diagnosticos",
+        "Datos_Fondo", "Diccionario_Zonas",
+    }
     xl = pd.ExcelFile(path)
     hojas = {}
     for sheet in xl.sheet_names:
+        if sheet not in HOJAS_NECESARIAS:
+            continue
         df = xl.parse(sheet)
         # Normalizar columnas object: asegurar que todos los valores sean str o NaN
+        # Evita ArrowTypeError al serializar con pyarrow (int mezclado con str)
         for col in df.select_dtypes(include="object").columns:
             def _a_str(v):
                 if v is None or (isinstance(v, float) and np.isnan(v)):
                     return np.nan
                 return str(v)
             df[col] = df[col].map(_a_str)
+        hojas[sheet] = df
+    return hojas
 
 
-@st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
 def preindexar_por_pozo(path: str):
     """Pre-agrupa y pre-procesa todas las hojas por NOMBRE_POZO.
     Fechas, tipos y ordenamiento se hacen UNA SOLA VEZ aquí dentro del cache.
@@ -643,7 +654,6 @@ def preindexar_por_pozo(path: str):
     }
 
 
-@st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
 def get_ult_diagnostico(path: str) -> pd.DataFrame:
     """
     Retorna el diagnóstico más reciente por pozo desde Historico_Diagnosticos.
@@ -752,11 +762,10 @@ with st.sidebar:
     sel_estado_op = st.multiselect("Estado operativo", options=estado_op_opts, placeholder="Todos")
 
     st.markdown("---")
-    if st.button("🔄 Actualizar datos", width="stretch", type="primary"):
+    if st.button("🔄 Actualizar datos", use_container_width=True, type="primary"):
         if EXCEL_PATH.exists():
             EXCEL_PATH.unlink()   # borra local → fuerza re-descarga desde Drive
         st.cache_data.clear()
-        st.cache_resource.clear()
         st.rerun()
     st.caption(f"Última actualización: {last_update}")
 
@@ -915,7 +924,7 @@ with tab1:
                 font=dict(family="Inter", size=12),
                 showlegend=False,
             )
-            st.plotly_chart(fig_zona, width="stretch")
+            st.plotly_chart(fig_zona, use_container_width=True)
         else:
             st.info("Sin datos de zona.")
 
@@ -949,7 +958,7 @@ with tab1:
                 showlegend=False,
                 xaxis_tickangle=-20,
             )
-            st.plotly_chart(fig_est, width="stretch")
+            st.plotly_chart(fig_est, use_container_width=True)
         else:
             st.info("Sin datos de estado operativo.")
 
@@ -1019,7 +1028,7 @@ with tab1:
                             showlegend=False,
                             yaxis=dict(tickfont=dict(size=10), ticklen=0),
                         )
-                        st.plotly_chart(fig_sub, width="stretch")
+                        st.plotly_chart(fig_sub, use_container_width=True)
                         # Listado de pozos por subcategoría
                         with st.expander(f"Ver pozos ({len(sub_df)})"):
                             cols_exp = [c for c in [
@@ -1041,7 +1050,7 @@ with tab1:
                                 .reset_index(drop=True)
                             )
                             tabla_pozos.index += 1
-                            st.dataframe(tabla_pozos, width="stretch", height=220)
+                            st.dataframe(tabla_pozos, use_container_width=True, height=220)
 
     # ══ COBERTURA DE ACCIONES — SUB-EXPLOTADOS ══════════════════
     # Cruza Historico_Diagnosticos con Acciones:
@@ -1201,7 +1210,7 @@ with tab1:
                         _tbl_r.index = range(1, len(_tbl_r) + 1)
                         st.dataframe(
                             _tbl_r,
-                            width="stretch",
+                            use_container_width=True,
                             height=min(400, len(_tbl_r) * 42 + 50),
                         )
 
@@ -1215,7 +1224,7 @@ with tab1:
                                 ] if c in _sin.columns]
                                 st.dataframe(
                                     _sin[_cols_sin].sort_values("DIAG_SUBCATEGORIA").reset_index(drop=True),
-                                    width="stretch", height=200
+                                    use_container_width=True, height=200
                                 )
 
     st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
@@ -1269,7 +1278,7 @@ with tab1:
 
         st.dataframe(
             _tbl_med,
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             height=min(400, len(_tbl_med) * 35 + 40),
             column_config={
@@ -1322,7 +1331,7 @@ with tab1:
 
             st.dataframe(
                 _df_drill,
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
                 height=min(420, len(_df_drill) * 35 + 40),
                 column_config={
@@ -1368,7 +1377,7 @@ with tab1:
                 font=dict(family="Inter", size=12),
                 showlegend=False,
             )
-            st.plotly_chart(fig_riesgo, width="stretch")
+            st.plotly_chart(fig_riesgo, use_container_width=True)
 
         with r2:
             st.markdown("**Distribución por Sistema Extractivo**")
@@ -1392,7 +1401,7 @@ with tab1:
                     font=dict(family="Inter", size=12),
                     showlegend=False,
                 )
-                st.plotly_chart(fig_sis, width="stretch")
+                st.plotly_chart(fig_sis, use_container_width=True)
 
     # ── Tabla filtrable ──
     st.markdown("---")
@@ -1430,7 +1439,7 @@ with tab1:
         if "RIESGO" in df_tabla.columns
         else df_tabla.style
     )
-    st.dataframe(styled, width="stretch", height=380, hide_index=True)
+    st.dataframe(styled, use_container_width=True, height=380, hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1593,7 +1602,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                         overlaying="y", side="right",
                     ),
                 )
-                st.plotly_chart(fig_prod, width="stretch")
+                st.plotly_chart(fig_prod, use_container_width=True)
             else:
                 st.info("Sin datos de producción.")
 
@@ -1617,7 +1626,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                     yaxis_title="% Agua", yaxis_ticksuffix="%",
                     font=dict(family="Inter", size=11), showlegend=False,
                 )
-                st.plotly_chart(fig_agua, width="stretch")
+                st.plotly_chart(fig_agua, use_container_width=True)
             else:
                 st.info("Sin datos de producción suficientes.")
 
@@ -1656,7 +1665,7 @@ def tab2_detalle(idx, maestro, df, last_update):
             "Días sin nivel":   _dias_desde(row.get("FECHA_ULT_NIVEL")),
         }
         df_info = pd.DataFrame(info_rows.items(), columns=["Atributo", "Valor"])
-        st.dataframe(df_info, width="stretch", hide_index=True, height=460)
+        st.dataframe(df_info, use_container_width=True, hide_index=True, height=460)
 
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
@@ -1703,7 +1712,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                 xaxis_title="Fecha", yaxis_title="Sumergencia (m)",
                 font=dict(family="Inter", size=11), showlegend=False,
             )
-            st.plotly_chart(fig_sum, width="stretch")
+            st.plotly_chart(fig_sum, use_container_width=True)
         else:
             st.info("Sin datos de sumergencia.")
 
@@ -1734,7 +1743,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                 xaxis_title="Fecha", yaxis_title="(%)",
                 font=dict(family="Inter", size=11),
             )
-            st.plotly_chart(fig_dyn, width="stretch")
+            st.plotly_chart(fig_dyn, use_container_width=True)
         else:
             st.info("Sin datos de dinamometría.")
 
@@ -1776,7 +1785,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                     yaxis_title="Carga",
                     font=dict(family="Inter", size=10),
                 )
-                st.plotly_chart(fig_c, width="stretch")
+                st.plotly_chart(fig_c, use_container_width=True)
 
     if cartas_pozo.empty:
         st.info("Sin cartas dinamométricas disponibles para este pozo.")
@@ -1808,7 +1817,7 @@ def tab2_detalle(idx, maestro, df, last_update):
         }
         st.dataframe(
             diag_pozo[cols_d].rename(columns=rename_d).reset_index(drop=True),
-            width="stretch", hide_index=True,
+            use_container_width=True, hide_index=True,
         )
 
     # ══ HISTORIAL DE DIAGNÓSTICOS OPERATIVOS ══
@@ -1869,7 +1878,7 @@ def tab2_detalle(idx, maestro, df, last_update):
         }
         st.dataframe(
             diag_op_pozo[cols_diag_op].rename(columns=rename_diag_op).reset_index(drop=True),
-            width="stretch", hide_index=True,
+            use_container_width=True, hide_index=True,
         )
     else:
         st.info("Sin diagnósticos registrados para este pozo.")
@@ -1917,7 +1926,7 @@ def tab2_detalle(idx, maestro, df, last_update):
 
             _diag_autor = st.text_input("Registrado por", value="", placeholder="Tu nombre")
             _submitted = st.form_submit_button(
-                "💾 Guardar diagnóstico", width="stretch"
+                "💾 Guardar diagnóstico", use_container_width=True
             )
 
         if _submitted:
@@ -1958,7 +1967,7 @@ def tab2_detalle(idx, maestro, df, last_update):
             st.markdown(f"**📋 Historial en Google Sheets — {len(_df_gs)} registro(s) totales:**")
             st.dataframe(
                 _df_gs.rename(columns=_COL_RENAME),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
                 height=min(350, len(_df_gs) * 35 + 45),
             )
@@ -1972,7 +1981,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                 data=_csv_bytes_gs,
                 file_name=f"diagnosticos_historial_{datetime.today().strftime('%Y%m%d_%H%M')}.csv",
                 mime="text/csv",
-                width="stretch",
+                use_container_width=True,
             )
         elif st.session_state["nuevos_diagnosticos"]:
             # Fallback: mostrar solo lo de la sesión si GSheets no responde
@@ -1980,7 +1989,7 @@ def tab2_detalle(idx, maestro, df, last_update):
             st.markdown(f"**{len(_df_nuevos)} registro(s) en esta sesión (sin conexión a Sheets):**")
             st.dataframe(
                 _df_nuevos.rename(columns=_COL_RENAME),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
                 height=min(300, len(_df_nuevos) * 35 + 40),
             )
@@ -1993,9 +2002,9 @@ def tab2_detalle(idx, maestro, df, last_update):
                 data=_csv_bytes,
                 file_name=f"diagnosticos_{datetime.today().strftime('%Y%m%d_%H%M')}.csv",
                 mime="text/csv",
-                width="stretch",
+                use_container_width=True,
             )
-            if st.button("🗑 Limpiar registros de la sesión", width="stretch"):
+            if st.button("🗑 Limpiar registros de la sesión", use_container_width=True):
                 st.session_state["nuevos_diagnosticos"] = []
                 st.rerun()
 
@@ -2027,7 +2036,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                 show_cols_acc = [c for c in acc_pozo.columns if "Unnamed" not in str(c)]
                 st.dataframe(
                     acc_pozo[show_cols_acc].head(5).reset_index(drop=True),
-                    width="stretch", hide_index=True,
+                    use_container_width=True, hide_index=True,
                 )
             else:
                 st.info("Sin acciones registradas para este pozo.")
@@ -2047,7 +2056,7 @@ def tab2_detalle(idx, maestro, df, last_update):
         rename_ev = {"FECHA_INICIO": "Fecha", "TIPO_EVENTO": "Tipo", "OBSERVACION": "Observación"}
         st.dataframe(
             ev_pozo[cols_ev].head(5).rename(columns=rename_ev).reset_index(drop=True),
-            width="stretch", hide_index=True,
+            use_container_width=True, hide_index=True,
         )
     else:
         st.info("Sin intervenciones registradas para este pozo.")
@@ -2112,7 +2121,7 @@ def tab2_detalle(idx, maestro, df, last_update):
                 ).dt.strftime("%d/%m/%Y").fillna("–")
             st.dataframe(
                 _df_show,
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
                 height=min(350, len(_df_show) * 35 + 40),
             )
