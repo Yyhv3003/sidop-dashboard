@@ -564,7 +564,7 @@ def color_riesgo(val):
 # CARGA DE DATOS
 # ─────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner="Cargando datos desde Excel...")
+@st.cache_resource(ttl=3600, show_spinner="Cargando datos desde Excel...")
 def load_all_data(path: str):
     xl = pd.ExcelFile(path)
     hojas = {}
@@ -582,6 +582,7 @@ def load_all_data(path: str):
     return hojas
 
 
+@st.cache_resource(ttl=3600)
 def preindexar_por_pozo(path: str):
     """Pre-agrupa y pre-procesa todas las hojas por NOMBRE_POZO.
     Fechas, tipos y ordenamiento se hacen UNA SOLA VEZ aquí dentro del cache.
