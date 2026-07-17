@@ -965,9 +965,9 @@ with tab1:
 
     # ── Gráficos Sub-categoría — fuente: Historico_Diagnosticos ──
     rangos = [
-        ("Subexplotado bajo entre 201-400m",      C_PRIM),
-        ("Subexplotado moderado entre 401-600m",   "#E67E22"),
-        ("Subexplotado alto > 600m",               C_RED),
+        ("Subexplotado bajo",      "Subexplot. Bajo",      C_PRIM),
+        ("Subexplotado moderado",  "Subexplot. Moderado",  "#E67E22"),
+        ("Subexplotado alto",      "Subexplot. Alto",      C_RED),
     ]
 
     # Elegir fuente: diagnóstico experto (preferido) o fallback en Maestro
@@ -988,18 +988,13 @@ with tab1:
         if tiene_datos:
             st.markdown("**Distribución por Sub-categoría de Diagnóstico — Subexplotados**")
             dcols = st.columns(3)
-            for col_w, (rango, color) in zip(dcols, rangos):
+            for col_w, (rango, label_corto, color) in zip(dcols, rangos):
                 sub_df = _src_sub[
                     _src_sub[_col_estado].str.contains(rango, na=False, regex=False)
                     & _src_sub["DIAG_SUBCATEGORIA"].notna()
                     & (_src_sub["DIAG_SUBCATEGORIA"].astype(str).str.strip() != "")
                 ].copy()
                 with col_w:
-                    label_corto = (
-                        rango.replace("Subexplotado bajo entre 201-400m",    "Subexplot. Bajo (201-400m)")
-                             .replace("Subexplotado moderado entre 401-600m", "Subexplot. Moderado (401-600m)")
-                             .replace("Subexplotado alto > 600m",             "Subexplot. Alto (>600m)")
-                    )
                     st.markdown(
                         f"<div style='font-size:0.78rem; font-weight:700; color:{color}; margin-bottom:4px'>"
                         f"{label_corto}</div>",
