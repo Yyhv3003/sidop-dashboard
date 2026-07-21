@@ -592,6 +592,7 @@ def load_all_data(path: str):
     return hojas
 
 
+@st.cache_resource(show_spinner=False)
 def preindexar_por_pozo(path: str):
     """Pre-agrupa y pre-procesa todas las hojas por NOMBRE_POZO.
     Fechas, tipos y ordenamiento se hacen UNA SOLA VEZ aquí dentro del cache.
@@ -655,6 +656,7 @@ def preindexar_por_pozo(path: str):
     }
 
 
+@st.cache_resource(show_spinner=False)
 def get_ult_diagnostico(path: str) -> pd.DataFrame:
     """
     Retorna el diagnóstico más reciente por pozo desde Historico_Diagnosticos.
@@ -767,6 +769,8 @@ with st.sidebar:
         if EXCEL_PATH.exists():
             EXCEL_PATH.unlink()   # borra local → fuerza re-descarga desde Drive
         load_all_data.clear()
+        preindexar_por_pozo.clear()
+        get_ult_diagnostico.clear()
         st.rerun()
     st.caption(f"Última actualización: {last_update}")
 
